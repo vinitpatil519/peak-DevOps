@@ -1,0 +1,5 @@
+# Force LF everywhere: scripts, YAML and Dockerfiles run in Linux containers/WSL.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

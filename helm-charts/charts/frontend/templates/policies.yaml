@@ -1,0 +1,100 @@
+{{- $kind := ternary "Rollout" "Deployment" .Values.rollout.enabled }}
+{{- $api := ternary "argoproj.io/v1alpha1" "apps/v1" .Values.rollout.enabled }}
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef: { apiVersion: {{ $api }}, kind: {{ $kind }}, name: {{ include "frontend.fullname" . }} }
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }} }
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+---
+{{- end }}
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels: {{- include "frontend.selectorLabels" . | nindent 6 }}
+---
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "frontend.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ . }} }
+        {{- end }}
+        # blue/green smoke-test Job
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: frontend-smoke-test }
+      ports: [{ port: {{ .Values.service.targetPort }}, protocol: TCP }]
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }} }
+      ports: [{ port: 15020, protocol: TCP }]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.backendNamespace }} }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: apache-proxy }
+      ports: [{ port: 8080, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-smoke-test
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: frontend-smoke-test }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "frontend.selectorLabels" . | nindent 14 }}
+      ports: [{ port: {{ .Values.service.targetPort }}, protocol: TCP }]
+---
+{{- end }}
+{{- if .Values.istio.enabled }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "frontend.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: {{- toYaml .Values.istio.allowedPrincipals | nindent 14 }}
+        - source:
+            namespaces: [{{ .Release.Namespace | quote }}]   # smoke-test Job
+{{- end }}

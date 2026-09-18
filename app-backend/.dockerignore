@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+tests/
+test.db
+coverage.xml
+test-results.xml
+.env
+Dockerfile

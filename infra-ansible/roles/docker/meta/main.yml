@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: docker
+  author: cloudforge
+  description: Docker Engine (or detect Docker Desktop on WSL2) plus kernel tuning
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

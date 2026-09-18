@@ -1,0 +1,153 @@
+{{- if .Values.istio.enabled }}
+# Mesh-wide strict mTLS: every sidecar-to-sidecar hop is encrypted and identity-authenticated.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: {{ .Values.networkPolicy.istioNamespace }}
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  mtls:
+    mode: {{ .Values.istio.mtlsMode }}
+{{- range $name, $ns := .Values.namespaces }}
+---
+# Default-deny authorization per app namespace; workloads add explicit ALLOW policies.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec: {}
+{{- end }}
+---
+# Restrict sidecar config to what each namespace talks to (smaller Envoy config, faster pushes).
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: default
+  namespace: frontend
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  egress:
+    - hosts: ["./*", "backend/*", "istio-system/*"]
+---
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: default
+  namespace: backend
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  egress:
+    - hosts: ["./*", "database/*", "istio-system/*"]
+---
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: default
+  namespace: database
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  egress:
+    - hosts: ["./*", "istio-system/*"]
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: frontend
+  namespace: frontend
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  host: frontend.frontend.svc.cluster.local
+  trafficPolicy:
+    tls: { mode: ISTIO_MUTUAL }
+    connectionPool:
+      http: { http1MaxPendingRequests: 200 }
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: apache-proxy
+  namespace: backend
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  host: apache-proxy.backend.svc.cluster.local
+  trafficPolicy:
+    tls: { mode: ISTIO_MUTUAL }
+    loadBalancer: { simple: LEAST_REQUEST }
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: apache-proxy
+  namespace: backend
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  hosts: [apache-proxy.backend.svc.cluster.local]
+  gateways: [mesh]
+  http:
+    - name: api
+      match: [{ uri: { prefix: /api/ } }]
+      timeout: 20s
+      retries: { attempts: 2, perTryTimeout: 8s, retryOn: "connect-failure,refused-stream,unavailable,503" }
+      route:
+        - destination: { host: apache-proxy.backend.svc.cluster.local, port: { number: 8080 } }
+{{- if .Values.istio.gateway.enabled }}
+---
+# Alternate edge: Istio ingress gateway (used on EKS behind an NLB, or for mesh-native demos).
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: cloudforge-gateway
+  namespace: {{ .Values.networkPolicy.istioNamespace }}
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selector: {{- toYaml .Values.istio.gateway.selector | nindent 4 }}
+  servers:
+    - port: { number: 80, name: http, protocol: HTTP }
+      hosts: {{- toYaml .Values.istio.gateway.hosts | nindent 8 }}
+      {{- if .Values.istio.gateway.tls.enabled }}
+      tls: { httpsRedirect: true }
+      {{- end }}
+    {{- if .Values.istio.gateway.tls.enabled }}
+    - port: { number: 443, name: https, protocol: HTTPS }
+      hosts: {{- toYaml .Values.istio.gateway.hosts | nindent 8 }}
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.istio.gateway.tls.credentialName }}
+        minProtocolVersion: TLSV1_2
+    {{- end }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: cloudforge-edge
+  namespace: frontend
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  hosts: {{- toYaml .Values.istio.gateway.hosts | nindent 4 }}
+  gateways: [{{ .Values.networkPolicy.istioNamespace }}/cloudforge-gateway]
+  http:
+    - name: web
+      match: [{ uri: { prefix: / } }]
+      headers:
+        response:
+          set:
+            Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+      route:
+        - destination:
+            host: {{ .Values.istio.edgeRoutes.frontendHost }}
+            port: { number: {{ .Values.istio.edgeRoutes.frontendPort }} }
+{{- end }}
+{{- end }}

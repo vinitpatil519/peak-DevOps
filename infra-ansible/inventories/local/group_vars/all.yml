@@ -1,0 +1,23 @@
+---
+# Pinned tool versions (bump via PR; Renovate tracks these with regex managers).
+kubectl_version: "v1.34.1"
+helm_version: "v3.19.0"
+kind_version: "v0.30.0"
+istioctl_version: "1.27.1"
+argocd_cli_version: "v3.1.8"
+argo_rollouts_cli_version: "v1.8.3"
+k9s_version: "v0.50.13"
+
+docker_users:
+  - "{{ ansible_user_id }}"
+
+# Monitoring role (installs kube-prometheus-stack/Loki/Fluent Bit into the current kube context)
+monitoring_namespace: monitoring
+monitoring_repo_root: "{{ playbook_dir }}/../.."
+kube_context: kind-cloudforge
+
+# Jenkins role
+jenkins_repo_root: "{{ playbook_dir }}/../.."
+jenkins_home: /var/jenkins_home
+jenkins_admin_password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') | default('change-me-jenkins', true) }}"
+sonar_db_password: "{{ lookup('env', 'SONAR_DB_PASSWORD') | default('change-me-sonar-db', true) }}"

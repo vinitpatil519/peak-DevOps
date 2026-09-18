@@ -1,0 +1,17 @@
+autoDiscovery:
+  clusterName: cloudforge-dev
+awsRegion: us-east-1
+rbac:
+  serviceAccount:
+    create: true
+    name: cluster-autoscaler           # Pod Identity association in terraform/modules/iam
+extraArgs:
+  balance-similar-node-groups: true
+  skip-nodes-with-system-pods: false
+  expander: least-waste
+  scale-down-unneeded-time: 5m
+  scale-down-delay-after-add: 5m
+serviceMonitor:
+  enabled: true
+  namespace: kube-system
+  selector: { release: kube-prometheus-stack }

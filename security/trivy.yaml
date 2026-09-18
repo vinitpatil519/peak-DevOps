@@ -1,0 +1,14 @@
+# Trivy configuration shared by CI (`trivy config --config security/trivy.yaml`) and local runs.
+severity: [HIGH, CRITICAL]
+exit-code: 1
+misconfiguration:
+  scanners: [terraform, dockerfile, kubernetes, helm]
+  helm:
+    values:
+      - gitops/environments/local/backend.yaml
+scan:
+  skip-dirs:
+    - app-frontend/node_modules
+    - app-backend/.venv
+    - k8s-manifests/rendered      # scanned via the charts instead of twice
+    - .cache

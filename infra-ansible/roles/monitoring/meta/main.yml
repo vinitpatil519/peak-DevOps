@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: monitoring
+  author: cloudforge
+  description: kube-prometheus-stack, Loki and Fluent Bit via Helm
+  license: MIT
+  min_ansible_version: "2.16"
+# Requires the helm role (run earlier in site.yml with become).
+dependencies: []

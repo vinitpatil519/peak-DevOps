@@ -1,0 +1,7 @@
+apiVersion: v2
+name: redis
+description: CloudForge Redis cache (single StatefulSet, password auth, LRU eviction, exporter)
+type: application
+version: 1.0.0
+appVersion: "8.2"
+kubeVersion: ">=1.30.0-0"

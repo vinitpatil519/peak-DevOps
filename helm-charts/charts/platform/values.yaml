@@ -1,0 +1,77 @@
+environment: local
+domain: cloudforge.local
+
+# Application namespaces. PSS 'restricted' works with Istio because the mesh is installed with
+# the Istio CNI plugin (no privileged istio-init container).
+namespaces:
+  frontend:
+    istioInjection: true
+    podSecurity: restricted
+    quota: { requests.cpu: "4", requests.memory: 4Gi, limits.memory: 8Gi, pods: "40" }
+  backend:
+    istioInjection: true
+    podSecurity: restricted
+    quota: { requests.cpu: "6", requests.memory: 6Gi, limits.memory: 12Gi, pods: "60" }
+  database:
+    istioInjection: true
+    podSecurity: restricted
+    quota: { requests.cpu: "4", requests.memory: 6Gi, limits.memory: 10Gi, pods: "20", persistentvolumeclaims: "10", requests.storage: 50Gi }
+
+limitRange:
+  default: { cpu: 200m, memory: 256Mi }
+  defaultRequest: { cpu: 50m, memory: 64Mi }
+  max: { cpu: "2", memory: 2Gi }
+
+networkPolicy:
+  enabled: true
+  # DNS: kube-dns / CoreDNS in kube-system
+  dnsNamespace: kube-system
+  istioNamespace: istio-system
+
+istio:
+  enabled: true
+  mtlsMode: STRICT
+  gateway:
+    enabled: true
+    # Default Istio ingress gateway deployment labels
+    selector: { istio: ingressgateway }
+    hosts: [cloudforge.local]
+    tls:
+      enabled: false
+      credentialName: cloudforge-gateway-tls   # Secret in istio-system (cert-manager Certificate)
+  # Paths on the Istio gateway (alternate edge; NGINX Ingress is the primary edge)
+  edgeRoutes:
+    frontendHost: frontend.frontend.svc.cluster.local
+    frontendPort: 80
+
+rbac:
+  enabled: true
+  # Groups mapped from IdP (EKS access entries / OIDC). Kind: map groups via kubeconfig.
+  developerGroup: cloudforge:developers
+  viewerGroup: cloudforge:viewers
+  ciServiceAccount:
+    name: jenkins-deployer
+    namespace: jenkins
+
+certManager:
+  enabled: false
+  email: platform@cloudforge.dev
+  # dns01 route53 on EKS; http01 via nginx elsewhere
+  solver: http01
+  route53:
+    region: us-east-1
+    hostedZoneID: ""
+  certificate:
+    enabled: false
+    dnsNames: []
+
+monitoring:
+  namespace: monitoring
+  prometheusRules: true
+  istioPodMonitor: true
+  dashboards: true
+  labels: { release: kube-prometheus-stack }
+  slo:
+    availabilityTarget: 0.995
+    errorBudget: 0.005        # 1 - availabilityTarget
+    latencyP95Seconds: 0.5

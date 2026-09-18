@@ -1,0 +1,86 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels: {{- include "pg.selectorLabels" . | nindent 6 }}
+---
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "pg.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.clientNamespaces }}
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ . }} }
+        {{- end }}
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: {{ include "pg.fullname" . }}-backup }
+      ports: [{ port: 5432, protocol: TCP }]
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }} }
+      ports: [{ port: 9187, protocol: TCP }, { port: 15020, protocol: TCP }]
+  egress: []   # database initiates no connections (DNS/istiod allowed by platform baseline)
+---
+{{- end }}
+{{- if .Values.istio.enabled }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "pg.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              {{- toYaml .Values.istio.allowedPrincipals | nindent 14 }}
+              - cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "pg.fullname" . }}-backup
+      to:
+        - operation: { ports: ["5432"] }
+    - to:
+        - operation: { ports: ["9187"] }
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "pg.fullname" . }}-metrics
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "pg.selectorLabels" . | nindent 6 }}
+  mtls: { mode: STRICT }
+  portLevelMtls:
+    "9187": { mode: PERMISSIVE }
+---
+{{- end }}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels:
+    {{- include "pg.labels" . | nindent 4 }}
+    {{- toYaml .Values.metrics.serviceMonitor.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "pg.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - { port: http-metrics, interval: 30s }
+{{- end }}

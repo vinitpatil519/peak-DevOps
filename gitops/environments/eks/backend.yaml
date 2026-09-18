@@ -1,0 +1,23 @@
+# EKS overrides for charts/backend. Jenkins bumps image.tag here (immutable git SHA tags in ECR).
+image:
+  repository: 123456789012.dkr.ecr.us-east-1.amazonaws.com/cloudforge/api
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+rollout:
+  enabled: true
+config:
+  CF_ENVIRONMENT: eks-dev
+  CF_LOG_LEVEL: INFO
+secret:
+  existingSecret: backend-credentials
+externalSecret:
+  enabled: true
+  remoteKey: cloudforge/dev/app
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 20
+vpa:
+  enabled: true
+  updateMode: "Off"
+nodeSelector:
+  cloudforge.dev/pool: apps

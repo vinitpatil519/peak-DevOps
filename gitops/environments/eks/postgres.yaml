@@ -1,0 +1,21 @@
+# EKS overrides for charts/postgres (EBS gp3 via the EBS CSI driver add-on)
+persistence:
+  size: 20Gi
+  storageClass: gp3
+backup:
+  size: 20Gi
+auth:
+  existingSecret: postgres-credentials
+externalSecret:
+  enabled: true
+  remoteKey: cloudforge/dev/app
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { memory: 2Gi }
+config:
+  max_connections: "200"
+  shared_buffers: 512MB
+  effective_cache_size: 1536MB
+  work_mem: 8MB
+  log_min_duration_statement: "250"
+  log_line_prefix: "%m [%p] %u@%d "

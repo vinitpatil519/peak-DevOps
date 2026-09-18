@@ -1,0 +1,7 @@
+installCRDs: true
+serviceAccount:
+  create: true
+  name: external-secrets               # Pod Identity association in terraform/modules/iam
+serviceMonitor:
+  enabled: true
+  additionalLabels: { release: kube-prometheus-stack }

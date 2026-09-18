@@ -1,0 +1,7 @@
+# EKS overrides for charts/apache-proxy
+image:
+  repository: 123456789012.dkr.ecr.us-east-1.amazonaws.com/cloudforge/apache-proxy
+  tag: "1.0.0"
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 10

@@ -1,0 +1,25 @@
+# Identity for Jenkins read-only cluster checks (bound by charts/platform RBAC: cloudforge-ci-readonly).
+# Deploys never use this: Jenkins only commits to Git and Argo CD applies.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-deployer
+  namespace: jenkins
+automountServiceAccountToken: false
+---
+# Long-lived token for an external Jenkins (prefer short-lived: kubectl create token --duration=1h).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jenkins-deployer-token
+  namespace: jenkins
+  annotations:
+    kubernetes.io/service-account.name: jenkins-deployer
+type: kubernetes.io/service-account-token

@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: helm
+  author: cloudforge
+  description: Helm CLI, chart repositories and helm-diff
+  license: MIT
+  min_ansible_version: "2.16"
+dependencies: []

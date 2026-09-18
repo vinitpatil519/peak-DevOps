@@ -1,0 +1,83 @@
+# Jenkins Configuration as Code: security realm, credentials, SonarQube server, seed job.
+jenkins:
+  systemMessage: "CloudForge CI — configured by JCasC (jenkins/casc/jenkins.yaml). Manual changes are overwritten."
+  numExecutors: 4
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - user:
+            name: admin
+            permissions: [Overall/Administer]
+        - group:
+            name: authenticated
+            permissions: [Overall/Read, Job/Read, Job/Build]
+  markupFormatter: plainText
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+  remotingSecurity:
+    enabled: true
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: github-push
+              description: GitHub PAT for GitOps promotion commits
+              username: "${GITHUB_USER}"
+              password: "${GITHUB_TOKEN}"
+          - string:
+              scope: GLOBAL
+              id: sonarqube-token
+              description: SonarQube analysis token
+              secret: "${SONAR_TOKEN}"
+          - string:
+              scope: GLOBAL
+              id: nvd-api-key
+              description: NVD API key for OWASP Dependency-Check
+              secret: "${NVD_API_KEY}"
+
+unclassified:
+  location:
+    url: http://localhost:8081/
+  sonarGlobalConfiguration:
+    buildWrapperEnabled: true
+    installations:
+      - name: sonarqube
+        serverUrl: http://sonarqube:9000
+        credentialsId: sonarqube-token
+  timestamper:
+    allPipelines: true
+
+security:
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: true
+
+jobs:
+  - script: |
+      multibranchPipelineJob('cloudforge-platform') {
+        displayName('CloudForge Platform')
+        description('Monorepo CI: tests, SonarQube, OWASP DC, Trivy, images, GitOps promotion')
+        branchSources {
+          git {
+            id('cloudforge-platform')
+            remote(System.getenv('REPO_URL'))
+            credentialsId('github-push')
+          }
+        }
+        orphanedItemStrategy {
+          discardOldItems { numToKeep(10) }
+        }
+        triggers {
+          periodicFolderTrigger { interval('5m') }
+        }
+      }

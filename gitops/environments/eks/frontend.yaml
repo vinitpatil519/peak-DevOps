@@ -1,0 +1,19 @@
+# EKS overrides for charts/frontend
+image:
+  repository: 123456789012.dkr.ecr.us-east-1.amazonaws.com/cloudforge/web
+  tag: "1.0.0"
+rollout:
+  enabled: true
+  autoPromotionEnabled: false
+ingress:
+  host: cloudforge.example.com
+  previewHost: preview.cloudforge.example.com
+  tls:
+    enabled: true
+    secretName: cloudforge-tls
+    clusterIssuer: letsencrypt-prod
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: cloudforge.example.com
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 12

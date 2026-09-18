@@ -1,0 +1,72 @@
+---
+- name: Create monitoring namespace
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ monitoring_namespace }}"
+        labels:
+          istio-injection: disabled
+          pod-security.kubernetes.io/enforce: privileged   # node-exporter, fluent-bit need host access
+
+- name: Check for existing Grafana admin Secret
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Secret
+    name: grafana-admin
+    namespace: "{{ monitoring_namespace }}"
+  register: grafana_secret
+
+- name: Create Grafana admin Secret with a random password (first run only)
+  when: grafana_secret.resources | length == 0
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: grafana-admin
+        namespace: "{{ monitoring_namespace }}"
+      type: Opaque
+      stringData:
+        admin-user: admin
+        admin-password: "{{ lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_letters', 'digits']) }}"
+  no_log: true
+
+- name: Install monitoring charts
+  kubernetes.core.helm:
+    kube_context: "{{ kube_context }}"
+    name: "{{ item.name }}"
+    chart_ref: "{{ item.chart }}"
+    chart_version: "{{ item.version }}"
+    release_namespace: "{{ monitoring_namespace }}"
+    update_repo_cache: true
+    wait: true
+    wait_timeout: 10m
+    values_files: >-
+      {{ [monitoring_repo_root ~ '/' ~ item.values ~ '/values.yaml']
+         + ([monitoring_repo_root ~ '/' ~ item.values ~ '/values' ~ monitoring_values_suffix ~ '.yaml']
+            if monitoring_values_suffix else []) }}
+  loop: "{{ monitoring_charts }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Wait for Prometheus to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Pod
+    namespace: "{{ monitoring_namespace }}"
+    label_selectors: ["app.kubernetes.io/name=prometheus"]
+    wait: true
+    wait_condition: { type: Ready, status: "True" }
+    wait_timeout: 300
+
+- name: Print access hint
+  ansible.builtin.debug:
+    msg: >-
+      Grafana: kubectl -n {{ monitoring_namespace }} port-forward svc/kube-prometheus-stack-grafana 3001:80
+      Password: kubectl -n {{ monitoring_namespace }} get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d

@@ -1,0 +1,23 @@
+# App-of-apps root. Apply once after installing Argo CD:
+#   kubectl apply -n argocd -f gitops/root-app.yaml
+# Everything else (projects, add-ons, CloudForge apps) is reconciled from Git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudforge-root
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/vinitpatil519/CloudForge.git
+    targetRevision: main
+    path: gitops/argocd
+    directory:
+      recurse: true
+      exclude: 'argocd-cm-patch.yaml'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

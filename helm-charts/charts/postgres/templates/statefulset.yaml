@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pg.fullname" . }}-init
+  labels: {{- include "pg.labels" . | nindent 4 }}
+data:
+  01-init.sql: |
+    {{- .Files.Get "files/init.sql" | nindent 4 }}
+{{- if .Values.auth.createSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ required "auth.password required when auth.createSecret=true" .Values.auth.password | quote }}
+{{- end }}
+{{- if .Values.externalSecret.enabled }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.auth.existingSecret }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef: {{- toYaml .Values.externalSecret.secretStoreRef | nindent 4 }}
+  target: { name: {{ .Values.auth.existingSecret }}, creationPolicy: Owner }
+  data:
+    - secretKey: password
+      remoteRef: { key: {{ .Values.externalSecret.remoteKey }}, property: db_password }
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pg.fullname" . }}-headless
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {{- include "pg.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: tcp-postgres, port: 5432, targetPort: postgres }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "pg.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: tcp-postgres, port: 5432, targetPort: postgres, appProtocol: postgresql }
+    {{- if .Values.exporter.enabled }}
+    - { name: http-metrics, port: 9187, targetPort: metrics }
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pg.fullname" . }}
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "pg.fullname" . }}-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy: { type: RollingUpdate }
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels: {{- include "pg.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "pg.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ toYaml .Values.config | sha256sum }}
+        {{- if .Values.istio.enabled }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "pg.fullname" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70          # 'postgres' user in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "-c"
+            - "listen_addresses=*"
+            - "-c"
+            - "password_encryption=scram-sha-256"
+            {{- range $k, $v := .Values.config }}
+            - "-c"
+            - {{ printf "%s=%s" $k $v | quote }}
+            {{- end }}
+          env:
+            - { name: POSTGRES_DB, value: {{ .Values.database | quote }} }
+            - { name: POSTGRES_USER, value: {{ .Values.username | quote }} }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "pg.secret" . }}, key: password } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --data-checksums" }
+          ports:
+            - { name: postgres, containerPort: 5432, protocol: TCP }
+          startupProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"] }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -h 127.0.0.1"] }
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -h 127.0.0.1"] }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- include "pg.restricted" . | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+        {{- if .Values.exporter.enabled }}
+        - name: exporter
+          image: {{ .Values.exporter.image }}
+          env:
+            - name: DATA_SOURCE_URI
+              value: "127.0.0.1:5432/{{ .Values.database }}?sslmode=disable"
+            - { name: DATA_SOURCE_USER, value: {{ .Values.username | quote }} }
+            - name: DATA_SOURCE_PASS
+              valueFrom: { secretKeyRef: { name: {{ include "pg.secret" . }}, key: password } }
+          ports:
+            - { name: metrics, containerPort: 9187, protocol: TCP }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 96Mi }
+          securityContext: {{- include "pg.restricted" . | nindent 12 }}
+        {{- end }}
+      volumes:
+        - { name: run, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+        - name: init
+          configMap: { name: {{ include "pg.fullname" . }}-init }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels: {{- include "pg.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests: { storage: {{ .Values.persistence.size }} }

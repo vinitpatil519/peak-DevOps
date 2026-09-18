@@ -1,0 +1,20 @@
+---
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+docker_daemon_config:
+  log-driver: json-file
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  live-restore: true
+  features:
+    buildkit: true
+# SonarQube / Elasticsearch requirement
+docker_sysctls:
+  vm.max_map_count: 524288
+  fs.inotify.max_user_watches: 524288   # kind + many pods
+  fs.inotify.max_user_instances: 512

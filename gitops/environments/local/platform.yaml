@@ -1,0 +1,11 @@
+# Local overrides for charts/platform
+environment: local
+domain: cloudforge.local
+istio:
+  gateway:
+    hosts: [mesh.cloudforge.local]
+certManager:
+  enabled: true
+  solver: http01
+  certificate:
+    enabled: false

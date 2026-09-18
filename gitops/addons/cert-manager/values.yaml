@@ -1,0 +1,10 @@
+crds:
+  enabled: true
+replicaCount: 1
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }
+podDisruptionBudget:
+  enabled: false

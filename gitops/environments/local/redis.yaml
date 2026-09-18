@@ -1,0 +1,5 @@
+# Local overrides for charts/redis
+maxmemory: 100mb
+resources:
+  requests: { cpu: 25m, memory: 32Mi }
+  limits: { memory: 160Mi }

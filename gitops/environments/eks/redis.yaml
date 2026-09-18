@@ -1,0 +1,10 @@
+# EKS overrides for charts/redis
+auth:
+  existingSecret: redis-credentials
+externalSecret:
+  enabled: true
+  remoteKey: cloudforge/dev/app
+maxmemory: 400mb
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { memory: 600Mi }

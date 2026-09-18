@@ -1,0 +1,66 @@
+{{- if .Values.istio.enabled }}
+# In-mesh routing for callers of backend-api (the Apache tier). Argo Rollouts rewrites the
+# weights on route 'primary' during a canary; outside a rollout stable=100 / canary=0.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels: {{- include "backend.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ include "backend.fullname" . }}
+    - {{ include "backend.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  gateways: [mesh]
+  http:
+    - name: primary
+      timeout: {{ .Values.istio.timeout }}
+      retries: {{- toYaml .Values.istio.retries | nindent 8 }}
+      route:
+        - destination:
+            host: {{ include "backend.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            subset: stable
+            port: { number: {{ .Values.service.port }} }
+          weight: 100
+        - destination:
+            host: {{ include "backend.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            subset: canary
+            port: { number: {{ .Values.service.port }} }
+          weight: 0
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels: {{- include "backend.labels" . | nindent 4 }}
+spec:
+  host: {{ include "backend.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  trafficPolicy:
+    tls: { mode: ISTIO_MUTUAL }
+    loadBalancer: { simple: LEAST_REQUEST }
+    connectionPool: {{- toYaml .Values.istio.connectionPool | nindent 6 }}
+    outlierDetection: {{- toYaml .Values.istio.outlierDetection | nindent 6 }}
+  # Argo Rollouts injects rollouts-pod-template-hash into these subset labels.
+  subsets:
+    - name: stable
+      labels: {{- include "backend.selectorLabels" . | nindent 8 }}
+    - name: canary
+      labels: {{- include "backend.selectorLabels" . | nindent 8 }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels: {{- include "backend.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "backend.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: {{- toYaml .Values.istio.allowedPrincipals | nindent 14 }}
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/*"]
+{{- end }}

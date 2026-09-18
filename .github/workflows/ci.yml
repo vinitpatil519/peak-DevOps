@@ -1,0 +1,54 @@
+# Lightweight PR checks on GitHub (Jenkins remains the system of record for builds/promotion).
+name: pr-checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: app-backend } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.13", cache: pip }
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check app tests
+      - run: pytest
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: app-frontend } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "24", cache: npm, cache-dependency-path: app-frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+  charts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - run: |
+          for env in local eks; do
+            for c in platform postgres redis backend apache-proxy frontend; do
+              helm lint helm-charts/charts/$c -f gitops/environments/$env/$c.yaml
+            done
+          done
+      - name: Rendered manifests are up to date
+        run: |
+          scripts/render-manifests.sh
+          git diff --exit-code k8s-manifests/rendered || (echo "run scripts/render-manifests.sh and commit" && exit 1)
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -recursive -check infra-terraform
+      - run: terraform -chdir=infra-terraform/environments/dev init -backend=false && terraform -chdir=infra-terraform/environments/dev validate

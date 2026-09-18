@@ -1,0 +1,8 @@
+clusterName: cloudforge-dev
+region: us-east-1
+vpcId: vpc-00000000000000000     # terraform output vpc_id
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller   # Pod Identity association in terraform/modules/iam
+replicaCount: 2
+enableServiceMutatorWebhook: false

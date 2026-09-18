@@ -1,0 +1,58 @@
+---
+# kubectl + the Kubernetes CLIs this project uses: kind, istioctl, argocd, kubectl-argo-rollouts, k9s.
+- name: Download kubectl checksum
+  ansible.builtin.uri:
+    url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/{{ kube_arch }}/kubectl.sha256"
+    return_content: true
+  register: kubectl_sha
+
+- name: Install kubectl
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/{{ kube_arch }}/kubectl"
+    dest: "{{ kube_bin_dir }}/kubectl"
+    mode: "0755"
+    checksum: "sha256:{{ kubectl_sha.content | trim }}"
+
+- name: Install kind
+  ansible.builtin.get_url:
+    url: "https://kind.sigs.k8s.io/dl/{{ kind_version }}/kind-linux-{{ kube_arch }}"
+    dest: "{{ kube_bin_dir }}/kind"
+    mode: "0755"
+
+- name: Install argocd CLI
+  ansible.builtin.get_url:
+    url: "https://github.com/argoproj/argo-cd/releases/download/{{ argocd_cli_version }}/argocd-linux-{{ kube_arch }}"
+    dest: "{{ kube_bin_dir }}/argocd"
+    mode: "0755"
+
+- name: Install kubectl-argo-rollouts plugin
+  ansible.builtin.get_url:
+    url: "https://github.com/argoproj/argo-rollouts/releases/download/{{ argo_rollouts_cli_version }}/kubectl-argo-rollouts-linux-{{ kube_arch }}"
+    dest: "{{ kube_bin_dir }}/kubectl-argo-rollouts"
+    mode: "0755"
+
+- name: Download istioctl
+  ansible.builtin.unarchive:
+    src: "https://github.com/istio/istio/releases/download/{{ istioctl_version }}/istioctl-{{ istioctl_version }}-linux-{{ kube_arch }}.tar.gz"
+    dest: "{{ kube_bin_dir }}"
+    remote_src: true
+    mode: "0755"
+    creates: "{{ kube_bin_dir }}/istioctl"
+
+- name: Download k9s
+  ansible.builtin.unarchive:
+    src: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_Linux_{{ kube_arch }}.tar.gz"
+    dest: "{{ kube_bin_dir }}"
+    remote_src: true
+    include: [k9s]
+    mode: "0755"
+    creates: "{{ kube_bin_dir }}/k9s"
+
+- name: kubectl bash completion
+  ansible.builtin.shell: "{{ kube_bin_dir }}/kubectl completion bash > /etc/bash_completion.d/kubectl"
+  args:
+    creates: /etc/bash_completion.d/kubectl
+
+- name: Verify kubectl
+  ansible.builtin.command: "{{ kube_bin_dir }}/kubectl version --client"
+  changed_when: false

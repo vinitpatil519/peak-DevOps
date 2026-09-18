@@ -1,0 +1,35 @@
+---
+- name: Download Helm
+  ansible.builtin.unarchive:
+    src: "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz"
+    dest: /tmp
+    remote_src: true
+    creates: "/tmp/linux-{{ helm_arch }}/helm"
+
+- name: Install Helm binary
+  ansible.builtin.copy:
+    src: "/tmp/linux-{{ helm_arch }}/helm"
+    dest: "{{ helm_bin_dir }}/helm"
+    remote_src: true
+    mode: "0755"
+
+- name: Add Helm repositories (for the invoking user)
+  kubernetes.core.helm_repository:
+    name: "{{ item.name }}"
+    repo_url: "{{ item.url }}"
+    binary_path: "{{ helm_bin_dir }}/helm"
+  loop: "{{ helm_repositories }}"
+  become: false
+
+- name: Install helm-diff plugin
+  kubernetes.core.helm_plugin:
+    plugin_path: "{{ item }}"
+    state: present
+    binary_path: "{{ helm_bin_dir }}/helm"
+  loop: "{{ helm_plugins }}"
+  become: false
+  failed_when: false   # already installed -> non-zero on some Helm versions
+
+- name: Verify Helm
+  ansible.builtin.command: "{{ helm_bin_dir }}/helm version --short"
+  changed_when: false

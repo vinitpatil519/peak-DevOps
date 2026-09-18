@@ -1,0 +1,40 @@
+# EKS overrides: gp3 storage, longer retention, spread across AZs, Grafana behind TLS.
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    retentionSize: 40GB
+    replicas: 2
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources: { requests: { storage: 50Gi } }
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels: { app.kubernetes.io/name: prometheus }
+
+alertmanager:
+  alertmanagerSpec:
+    replicas: 2
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources: { requests: { storage: 5Gi } }
+
+grafana:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts: [cloudforge.example.com]
+    path: /grafana
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      - secretName: grafana-tls
+        hosts: [cloudforge.example.com]

@@ -1,0 +1,21 @@
+{{- if .Values.vpa.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels: {{- include "backend.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    apiVersion: {{ if .Values.rollout.enabled }}argoproj.io/v1alpha1{{ else }}apps/v1{{ end }}
+    kind: {{ include "backend.workloadKind" . }}
+    name: {{ include "backend.fullname" . }}
+  updatePolicy:
+    updateMode: {{ .Values.vpa.updateMode | quote }}
+  resourcePolicy:
+    containerPolicies:
+      - containerName: api
+        minAllowed: { cpu: 50m, memory: 96Mi }
+        maxAllowed: { cpu: "1", memory: 1Gi }
+      - containerName: istio-proxy
+        mode: "Off"
+{{- end }}

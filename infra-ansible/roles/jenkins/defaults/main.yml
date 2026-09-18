@@ -1,0 +1,3 @@
+---
+jenkins_stack_dir: /opt/cloudforge-ci
+jenkins_uid: 1000

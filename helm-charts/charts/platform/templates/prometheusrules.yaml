@@ -1,0 +1,182 @@
+{{- $m := .Values.monitoring }}
+{{- if $m.prometheusRules }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cloudforge-rules
+  namespace: {{ $m.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    {{- toYaml $m.labels | nindent 4 }}
+spec:
+  groups:
+    # ---------------- recording rules (RED + SLO) ----------------
+    - name: cloudforge.recording
+      interval: 30s
+      rules:
+        - record: cloudforge:http_requests:rate5m
+          expr: sum by (namespace, route, method, status) (rate(http_requests_total[5m]))
+        - record: cloudforge:http_errors:ratio_rate5m
+          expr: |
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 1e-9)
+        - record: cloudforge:http_errors:ratio_rate1h
+          expr: |
+            sum(rate(http_requests_total{status=~"5.."}[1h]))
+            / clamp_min(sum(rate(http_requests_total[1h])), 1e-9)
+        - record: cloudforge:http_errors:ratio_rate6h
+          expr: |
+            sum(rate(http_requests_total{status=~"5.."}[6h]))
+            / clamp_min(sum(rate(http_requests_total[6h])), 1e-9)
+        - record: cloudforge:http_latency:p95_5m
+          expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
+        - record: cloudforge:http_latency:p99_5m
+          expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
+        - record: cloudforge:orders:rate5m
+          expr: sum(rate(cloudforge_orders_created_total[5m]))
+        - record: cloudforge:cache_hit:ratio_rate5m
+          expr: |
+            sum(rate(cloudforge_cache_events_total{result="hit"}[5m]))
+            / clamp_min(sum(rate(cloudforge_cache_events_total{result=~"hit|miss"}[5m])), 1e-9)
+
+    # ---------------- SLO burn-rate alerts (multi-window, Google SRE workbook) ----------------
+    - name: cloudforge.slo
+      rules:
+        - alert: CloudForgeErrorBudgetFastBurn
+          expr: |
+            cloudforge:http_errors:ratio_rate5m > (14.4 * {{ $m.slo.errorBudget }})
+            and cloudforge:http_errors:ratio_rate1h > (14.4 * {{ $m.slo.errorBudget }})
+          for: 2m
+          labels: { severity: critical, team: platform }
+          annotations:
+            summary: API burning error budget 14x faster than allowed
+            description: 5xx ratio {{ "{{" }} $value | humanizePercentage {{ "}}" }} exceeds fast-burn threshold for SLO {{ $m.slo.availabilityTarget }}.
+            runbook_url: https://github.com/vinitpatil519/CloudForge/blob/main/docs/runbooks.md#error-budget-burn
+        - alert: CloudForgeErrorBudgetSlowBurn
+          expr: |
+            cloudforge:http_errors:ratio_rate1h > (6 * {{ $m.slo.errorBudget }})
+            and cloudforge:http_errors:ratio_rate6h > (6 * {{ $m.slo.errorBudget }})
+          for: 15m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: API burning error budget 6x faster than allowed
+            runbook_url: https://github.com/vinitpatil519/CloudForge/blob/main/docs/runbooks.md#error-budget-burn
+        - alert: CloudForgeHighLatencyP95
+          expr: cloudforge:http_latency:p95_5m > {{ $m.slo.latencyP95Seconds }}
+          for: 10m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: API p95 latency above {{ $m.slo.latencyP95Seconds }}s
+            description: p95 is {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
+
+    # ---------------- application / dependency health ----------------
+    - name: cloudforge.app
+      rules:
+        - alert: CloudForgeApiDown
+          expr: sum(kube_pod_status_ready{namespace="backend",pod=~"backend-api-.*",condition="true"}) == 0 or absent(kube_pod_status_ready{namespace="backend",pod=~"backend-api-.*",condition="true"})
+          for: 2m
+          labels: { severity: critical, team: platform }
+          annotations:
+            summary: No backend-api replicas are available
+        - alert: CloudForgePostgresDown
+          expr: pg_up == 0 or absent(pg_up)
+          for: 1m
+          labels: { severity: critical, team: platform }
+          annotations:
+            summary: PostgreSQL is unreachable by its exporter
+        - alert: CloudForgePostgresConnectionsHigh
+          expr: sum(pg_stat_activity_count) / max(pg_settings_max_connections) > 0.8
+          for: 10m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: PostgreSQL connections above 80% of max_connections
+        - alert: CloudForgeRedisDown
+          expr: redis_up == 0 or absent(redis_up)
+          for: 2m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: Redis cache down (API degraded to database reads)
+        - alert: CloudForgeRedisMemoryHigh
+          expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+          for: 10m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: Redis memory above 90% of maxmemory
+        - alert: CloudForgeApacheDown
+          expr: apache_up == 0
+          for: 2m
+          labels: { severity: critical, team: platform }
+          annotations:
+            summary: Apache proxy tier not serving
+        - alert: CloudForgeCacheHitRatioLow
+          expr: cloudforge:cache_hit:ratio_rate5m < 0.5 and sum(rate(cloudforge_cache_events_total[5m])) > 1
+          for: 30m
+          labels: { severity: info, team: platform }
+          annotations:
+            summary: Cache hit ratio below 50%
+
+    # ---------------- Kubernetes workload health ----------------
+    - name: cloudforge.kubernetes
+      rules:
+        - alert: CloudForgePodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"frontend|backend|database"}[15m]) > 3
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: "{{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.pod {{ "}}" }} restarting repeatedly"
+        - alert: CloudForgeHpaMaxedOut
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace=~"frontend|backend"}
+            >= kube_horizontalpodautoscaler_spec_max_replicas{namespace=~"frontend|backend"}
+          for: 15m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: "HPA {{ "{{" }} $labels.horizontalpodautoscaler {{ "}}" }} at max replicas for 15m"
+        - alert: CloudForgePdbViolated
+          expr: kube_poddisruptionbudget_status_current_healthy < kube_poddisruptionbudget_status_desired_healthy
+          for: 10m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: "PDB {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.poddisruptionbudget {{ "}}" }} below desired healthy"
+        - alert: CloudForgePvcFillingUp
+          expr: |
+            kubelet_volume_stats_available_bytes{namespace="database"}
+            / kubelet_volume_stats_capacity_bytes{namespace="database"} < 0.15
+          for: 10m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: "PVC {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} has <15% free"
+        - alert: CloudForgeRolloutDegraded
+          expr: rollout_info{phase="Degraded"} == 1
+          for: 1m
+          labels: { severity: critical, team: platform }
+          annotations:
+            summary: "Argo Rollout {{ "{{" }} $labels.name {{ "}}" }} degraded (canary/bluegreen aborted)"
+        - alert: CloudForgeBackupFailed
+          expr: kube_job_status_failed{namespace="database",job_name=~"postgres-backup.*"} > 0
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: PostgreSQL backup job failed
+
+    # ---------------- node / cluster capacity ----------------
+    - name: cloudforge.nodes
+      rules:
+        - alert: CloudForgeNodeCpuHigh
+          expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85
+          for: 15m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} CPU above 85%"
+        - alert: CloudForgeNodeMemoryHigh
+          expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.9
+          for: 10m
+          labels: { severity: warning, team: platform }
+          annotations:
+            summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} memory above 90%"
+        - alert: CloudForgeNodeDiskFilling
+          expr: |
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} < 0.1
+          for: 10m
+          labels: { severity: critical, team: platform }
+          annotations:
+            summary: "Node {{ "{{" }} $labels.instance {{ "}}" }} filesystem {{ "{{" }} $labels.mountpoint {{ "}}" }} <10% free"
+{{- end }}

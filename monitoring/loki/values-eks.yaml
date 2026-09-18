@@ -1,0 +1,28 @@
+# EKS: store chunks/index in S3 (bucket from terraform module 's3', access via EKS Pod Identity).
+loki:
+  storage:
+    type: s3
+    bucketNames:
+      chunks: cloudforge-dev-loki          # terraform output loki_bucket
+      ruler: cloudforge-dev-loki
+      admin: cloudforge-dev-loki
+    s3:
+      region: us-east-1
+  schemaConfig:
+    configs:
+      - from: "2025-01-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index: { prefix: loki_index_, period: 24h }
+  compactor:
+    retention_enabled: true
+    delete_request_store: s3
+
+serviceAccount:
+  create: true
+  name: loki                                # bound to the Loki IAM role by Pod Identity
+
+singleBinary:
+  persistence:
+    storageClass: gp3

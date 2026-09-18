@@ -1,0 +1,49 @@
+fullnameOverride: apache-proxy
+
+image:
+  repository: cloudforge/apache-proxy
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+backendUrl: http://backend-api.backend.svc.cluster.local:8000
+
+service:
+  port: 8080
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }
+
+exporter:
+  enabled: true
+  image: quay.io/prometheuscommunity/apache-exporter:v1.0.10
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  frontendNamespace: frontend
+  monitoringNamespace: monitoring
+
+istio:
+  enabled: true
+  allowedPrincipals:
+    - cluster.local/ns/frontend/sa/frontend
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }

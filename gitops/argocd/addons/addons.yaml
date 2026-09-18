@@ -1,0 +1,109 @@
+# Cluster add-ons managed by Argo CD from upstream Helm repos.
+# Waves: CRD providers first. Versions are pinned; Renovate (renovate.json) opens upgrade PRs.
+# Values live next to their docs: monitoring/<addon>/ for observability, gitops/addons/<addon>/ otherwise.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cloudforge-addons
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchExpressions:
+                  - { key: cloudforge.dev/env, operator: In, values: [local, eks] }
+          - list:
+              elements:
+                - { name: metrics-server, repoURL: "https://kubernetes-sigs.github.io/metrics-server/", chart: metrics-server, version: "3.13.0", namespace: kube-system, wave: "-4", valuesDir: gitops/addons/metrics-server }
+                - { name: cert-manager, repoURL: "https://charts.jetstack.io", chart: cert-manager, version: "v1.18.2", namespace: cert-manager, wave: "-3", valuesDir: gitops/addons/cert-manager }
+                - { name: argo-rollouts, repoURL: "https://argoproj.github.io/argo-helm", chart: argo-rollouts, version: "2.40.4", namespace: argo-rollouts, wave: "-3", valuesDir: monitoring/argo-rollouts }
+                - { name: vpa, repoURL: "https://charts.fairwinds.com/stable", chart: vpa, version: "4.8.0", namespace: vpa, wave: "-3", valuesDir: gitops/addons/vpa }
+                - { name: kube-prometheus-stack, repoURL: "https://prometheus-community.github.io/helm-charts", chart: kube-prometheus-stack, version: "77.12.0", namespace: monitoring, wave: "-2", valuesDir: monitoring/kube-prometheus-stack }
+                - { name: loki, repoURL: "https://grafana.github.io/helm-charts", chart: loki, version: "6.41.1", namespace: monitoring, wave: "-1", valuesDir: monitoring/loki }
+                - { name: fluent-bit, repoURL: "https://fluent.github.io/helm-charts", chart: fluent-bit, version: "0.53.0", namespace: monitoring, wave: "-1", valuesDir: monitoring/fluent-bit }
+                - { name: ingress-nginx, repoURL: "https://kubernetes.github.io/ingress-nginx", chart: ingress-nginx, version: "4.13.3", namespace: ingress-nginx, wave: "-1", valuesDir: gitops/addons/ingress-nginx }
+  template:
+    metadata:
+      name: '{{ .name }}-{{ index .metadata.labels "cloudforge.dev/env" }}'
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{ .wave }}'
+    spec:
+      project: cloudforge-platform
+      sources:
+        - repoURL: '{{ .repoURL }}'
+          chart: '{{ .chart }}'
+          targetRevision: '{{ .version }}'
+          helm:
+            releaseName: '{{ .name }}'
+            valueFiles:
+              - '$values/{{ .valuesDir }}/values.yaml'
+              - '$values/{{ .valuesDir }}/values-{{ index .metadata.labels "cloudforge.dev/env" }}.yaml'
+            ignoreMissingValueFiles: true
+        - repoURL: https://github.com/vinitpatil519/CloudForge.git
+          targetRevision: main
+          ref: values
+      destination:
+        server: '{{ .server }}'
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true, ServerSideApply=true]
+        managedNamespaceMetadata:
+          labels:
+            # ingress-nginx joins the mesh so it can reach STRICT-mTLS services.
+            istio-injection: '{{ if eq .name "ingress-nginx" }}enabled{{ else }}disabled{{ end }}'
+        retry:
+          limit: 5
+          backoff: { duration: 15s, factor: 2, maxDuration: 5m }
+---
+# AWS-only add-ons (IAM via EKS Pod Identity associations created by Terraform module 'iam').
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cloudforge-addons-eks
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels: { cloudforge.dev/env: eks }
+          - list:
+              elements:
+                - { name: aws-load-balancer-controller, repoURL: "https://aws.github.io/eks-charts", chart: aws-load-balancer-controller, version: "1.14.0", namespace: kube-system, wave: "-4" }
+                - { name: cluster-autoscaler, repoURL: "https://kubernetes.github.io/autoscaler", chart: cluster-autoscaler, version: "9.50.1", namespace: kube-system, wave: "-3" }
+                - { name: external-secrets, repoURL: "https://charts.external-secrets.io", chart: external-secrets, version: "0.20.2", namespace: external-secrets, wave: "-3" }
+                - { name: external-dns, repoURL: "https://kubernetes-sigs.github.io/external-dns/", chart: external-dns, version: "1.19.0", namespace: external-dns, wave: "-2" }
+  template:
+    metadata:
+      name: '{{ .name }}-eks'
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{ .wave }}'
+    spec:
+      project: cloudforge-platform
+      sources:
+        - repoURL: '{{ .repoURL }}'
+          chart: '{{ .chart }}'
+          targetRevision: '{{ .version }}'
+          helm:
+            releaseName: '{{ .name }}'
+            valueFiles: ['$values/gitops/addons/{{ .name }}/values-eks.yaml']
+        - repoURL: https://github.com/vinitpatil519/CloudForge.git
+          targetRevision: main
+          ref: values
+      destination:
+        server: '{{ .server }}'
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true, ServerSideApply=true]
+        retry:
+          limit: 5
+          backoff: { duration: 15s, factor: 2, maxDuration: 5m }

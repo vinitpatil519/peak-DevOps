@@ -1,0 +1,45 @@
+{{- range $name, $ns := .Values.namespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $ | nindent 4 }}
+    {{- if $ns.istioInjection }}
+    istio-injection: enabled
+    {{- end }}
+    pod-security.kubernetes.io/enforce: {{ $ns.podSecurity }}
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    # Never let an Argo CD prune delete a namespace holding PVCs/secrets.
+    argocd.argoproj.io/sync-options: Delete=false
+    helm.sh/resource-policy: keep
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ $name }}-quota
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  hard:
+    {{- range $k, $v := $ns.quota }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ $name }}-limits
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default: {{- toYaml $.Values.limitRange.default | nindent 8 }}
+      defaultRequest: {{- toYaml $.Values.limitRange.defaultRequest | nindent 8 }}
+      max: {{- toYaml $.Values.limitRange.max | nindent 8 }}
+{{- end }}

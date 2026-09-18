@@ -1,0 +1,35 @@
+{{- if .Values.rollout.enabled }}
+# Canary pods are named <rollout>-<pod-template-hash>-<suffix>, so the hash isolates canary metrics.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: backend-success-rate
+  labels: {{- include "backend.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: canary-hash
+  metrics:
+    - name: success-rate
+      interval: 30s
+      count: 4
+      failureLimit: 1
+      # NaN (no traffic yet) counts as success to avoid aborting idle canaries.
+      successCondition: result[0] >= {{ .Values.rollout.analysis.successRateThreshold }} || isNaN(result[0])
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.analysis.prometheusAddress }}
+          query: |
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "backend.fullname" . }}-{{ "{{" }}args.canary-hash{{ "}}" }}-.*",status!~"5.."}[2m]))
+            /
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "backend.fullname" . }}-{{ "{{" }}args.canary-hash{{ "}}" }}-.*"}[2m]))
+    - name: p95-latency
+      interval: 30s
+      count: 4
+      failureLimit: 1
+      successCondition: result[0] <= {{ .Values.rollout.analysis.p95LatencyThresholdSeconds }} || isNaN(result[0])
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.analysis.prometheusAddress }}
+          query: |
+            histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}",pod=~"{{ include "backend.fullname" . }}-{{ "{{" }}args.canary-hash{{ "}}" }}-.*"}[2m])))
+{{- end }}

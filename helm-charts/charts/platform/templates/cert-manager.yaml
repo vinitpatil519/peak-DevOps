@@ -1,0 +1,50 @@
+{{- if .Values.certManager.enabled }}
+{{- range $env := list "staging" "prod" }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-{{ $env }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  acme:
+    email: {{ $.Values.certManager.email }}
+    server: {{ ternary "https://acme-v02.api.letsencrypt.org/directory" "https://acme-staging-v02.api.letsencrypt.org/directory" (eq $env "prod") }}
+    privateKeySecretRef:
+      name: letsencrypt-{{ $env }}-account
+    solvers:
+      {{- if eq $.Values.certManager.solver "dns01" }}
+      - dns01:
+          route53:
+            region: {{ $.Values.certManager.route53.region }}
+            hostedZoneID: {{ $.Values.certManager.route53.hostedZoneID }}
+      {{- else }}
+      - http01:
+          ingress:
+            ingressClassName: nginx
+      {{- end }}
+{{- end }}
+---
+# Self-signed issuer for local clusters (no public DNS).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- if .Values.certManager.certificate.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cloudforge-gateway-tls
+  namespace: {{ .Values.networkPolicy.istioNamespace }}
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.istio.gateway.tls.credentialName }}
+  issuerRef: { kind: ClusterIssuer, name: {{ ternary "letsencrypt-prod" "selfsigned" (eq .Values.environment "prod") }} }
+  dnsNames: {{- toYaml .Values.certManager.certificate.dnsNames | nindent 4 }}
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+{{- end }}
+{{- end }}

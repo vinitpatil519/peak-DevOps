@@ -1,0 +1,18 @@
+# kind: bind host ports 80/443 on the control-plane node (see scripts/kind-config.yaml).
+controller:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget: null
+  hostPort:
+    enabled: true
+  service:
+    type: NodePort
+  nodeSelector:
+    ingress-ready: "true"
+  tolerations:
+    - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+  publishService:
+    enabled: false
+  extraArgs:
+    publish-status-address: localhost

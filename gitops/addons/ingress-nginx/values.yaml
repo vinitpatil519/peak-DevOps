@@ -1,0 +1,46 @@
+# ingress-nginx controller.
+# NOTE: the Kubernetes community ingress-nginx project was retired (best-effort maintenance ended
+# March 2026). It is kept here because the blueprint requires NGINX Ingress; plan a migration to
+# Gateway API (Istio Gateway is already wired as the alternate edge in charts/platform) or to the
+# F5 NGINX Ingress Controller. Track CVEs closely while it remains in use.
+controller:
+  replicaCount: 2
+  ingressClassResource:
+    name: nginx
+    default: true
+  allowSnippetAnnotations: false
+  config:
+    use-forwarded-headers: "true"
+    enable-real-ip: "true"
+    server-tokens: "false"
+    ssl-protocols: TLSv1.2 TLSv1.3
+    hsts: "true"
+    log-format-escape-json: "true"
+    log-format-upstream: >-
+      {"ts":"$time_iso8601","remote":"$remote_addr","request_id":"$req_id","method":"$request_method",
+      "host":"$host","uri":"$request_uri","status":$status,"bytes":$bytes_sent,"rt":$request_time,
+      "upstream":"$upstream_addr","upstream_rt":"$upstream_response_time","ua":"$http_user_agent"}
+  # Join the mesh for OUTBOUND only: clients still hit NGINX directly, while NGINX -> service
+  # traffic is upgraded to Istio mTLS by the sidecar.
+  podAnnotations:
+    sidecar.istio.io/inject: "true"
+    traffic.sidecar.istio.io/includeInboundPorts: ""
+    traffic.sidecar.istio.io/excludeInboundPorts: "80,443,10254"
+  podLabels:
+    sidecar.istio.io/inject: "true"
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels: { release: kube-prometheus-stack }
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  podDisruptionBudget:
+    minAvailable: 1
+  admissionWebhooks:
+    enabled: true

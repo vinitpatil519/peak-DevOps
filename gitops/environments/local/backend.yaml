@@ -1,0 +1,20 @@
+# Local (kind/minikube) overrides for charts/backend. Jenkins bumps image.tag here.
+image:
+  repository: cloudforge/api
+  tag: "local"
+  pullPolicy: IfNotPresent
+rollout:
+  enabled: true
+config:
+  CF_ENVIRONMENT: local
+  CF_LOG_LEVEL: INFO
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4
+resources:
+  requests: { cpu: 50m, memory: 96Mi }
+  limits: { memory: 256Mi }
+topologySpreadConstraints:
+  enabled: false
+vpa:
+  enabled: false

@@ -1,0 +1,7 @@
+---
+- name: CI server (Jenkins + SonarQube)
+  hosts: ci
+  become: true
+  roles:
+    - docker
+    - jenkins

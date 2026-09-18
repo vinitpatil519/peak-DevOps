@@ -1,0 +1,147 @@
+# kube-prometheus-stack (prometheus-community) — Prometheus Operator, Prometheus, Alertmanager,
+# Grafana, node-exporter, kube-state-metrics.
+# helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#   -n monitoring --create-namespace -f monitoring/kube-prometheus-stack/values.yaml \
+#   [-f monitoring/kube-prometheus-stack/values-eks.yaml]
+fullnameOverride: kube-prometheus-stack
+
+crds:
+  enabled: true
+
+defaultRules:
+  create: true
+  rules:
+    etcd: false            # managed control plane (EKS) / kind: not scrapeable
+    kubeScheduler: false
+    kubeControllerManager: false
+    kubeProxy: false
+
+kubeEtcd: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeProxy: { enabled: false }
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    retentionSize: 8GB
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    # Pick up ServiceMonitors/PodMonitors/Rules from any namespace, only with our release label.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: { matchLabels: { release: kube-prometheus-stack } }
+    podMonitorSelector: { matchLabels: { release: kube-prometheus-stack } }
+    ruleSelector: { matchLabels: { release: kube-prometheus-stack } }
+    enableRemoteWriteReceiver: false
+    resources:
+      requests: { cpu: 200m, memory: 1Gi }
+      limits: { memory: 3Gi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources: { requests: { storage: 10Gi } }
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      fsGroup: 65534
+      seccompProfile: { type: RuntimeDefault }
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 20m, memory: 64Mi }
+      limits: { memory: 256Mi }
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: default
+      group_by: [alertname, namespace, severity]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - matchers: ['alertname = "Watchdog"']
+          receiver: "null"
+        - matchers: ['severity = "critical"']
+          receiver: pager
+          continue: true
+        - matchers: ['severity =~ "warning|critical"']
+          receiver: chat
+    inhibit_rules:
+      - source_matchers: ['severity = "critical"']
+        target_matchers: ['severity = "warning"']
+        equal: [alertname, namespace]
+    receivers:
+      - name: "null"
+      - name: default
+      # Replace URLs via a Secret-backed alertmanagerConfig in real environments.
+      - name: chat
+        webhook_configs:
+          - url: http://alertmanager-webhook-logger.monitoring.svc:8080/chat
+            send_resolved: true
+      - name: pager
+        webhook_configs:
+          - url: http://alertmanager-webhook-logger.monitoring.svc:8080/pager
+            send_resolved: true
+
+grafana:
+  adminUser: admin
+  # Admin password comes from a Secret created by scripts/bootstrap-*.sh (never in Git).
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  defaultDashboardsTimezone: browser
+  persistence:
+    enabled: false
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki-gateway.monitoring.svc.cluster.local
+      jsonData:
+        maxLines: 1000
+        derivedFields:
+          - name: request_id
+            matcherRegex: '"request_id":"([^"]+)"'
+            url: '$${__value.raw}'
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/grafana"
+      serve_from_sub_path: true
+    auth.anonymous:
+      enabled: false
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts: [cloudforge.local]
+    path: /grafana
+
+kube-state-metrics:
+  # Expose Argo Rollouts / custom resource state is handled by the rollouts controller metrics.
+  metricLabelsAllowlist:
+    - pods=[app.kubernetes.io/name,rollouts-pod-template-hash]
+
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: true
+    mountPropagation: HostToContainer

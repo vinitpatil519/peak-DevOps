@@ -1,0 +1,46 @@
+# istioctl install -y -f k8s-manifests/istio/istio-operator.yaml
+# - Istio CNI: no privileged init container, so app namespaces can enforce PSS 'restricted'.
+# - holdApplicationUntilProxyStarts: avoid app start before Envoy is ready.
+# - Ingress gateway: alternate edge (Gateway/VirtualService in charts/platform).
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: cloudforge
+  namespace: istio-system
+spec:
+  profile: default
+  components:
+    cni:
+      enabled: true
+      namespace: kube-system
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          hpaSpec: { minReplicas: 1, maxReplicas: 3 }
+          service:
+            type: ClusterIP        # EKS overlay switches to an NLB (istio-operator-eks.yaml)
+    pilot:
+      k8s:
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }
+  meshConfig:
+    accessLogFile: /dev/stdout
+    accessLogEncoding: JSON
+    enablePrometheusMerge: true
+    defaultConfig:
+      holdApplicationUntilProxyStarts: true
+      proxyMetadata:
+        ISTIO_META_DNS_CAPTURE: "true"
+    outboundTrafficPolicy:
+      mode: ALLOW_ANY
+  values:
+    cni:
+      excludeNamespaces: [istio-system, kube-system]
+    global:
+      proxy:
+        resources:
+          requests: { cpu: 20m, memory: 64Mi }
+          limits: { memory: 256Mi }
+    sidecarInjectorWebhook:
+      rewriteAppHTTPProbe: true

@@ -1,0 +1,8 @@
+# Fairwinds VPA chart: recommender only. Workloads use updateMode "Off" (recommendations),
+# which avoids fighting the HPA; read them with: kubectl describe vpa -n backend
+recommender:
+  enabled: true
+updater:
+  enabled: false
+admissionController:
+  enabled: false

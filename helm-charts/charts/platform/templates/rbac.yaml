@@ -1,0 +1,97 @@
+{{- if .Values.rbac.enabled }}
+# Read-only view across CloudForge namespaces (aggregates the built-in 'view' role).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudforge-viewer
+  labels: {{- include "platform.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, analysisruns, analysistemplates, applications]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.istio.io, security.istio.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudforge-viewer
+  labels: {{- include "platform.labels" . | nindent 4 }}
+subjects:
+  - { kind: Group, name: {{ .Values.rbac.viewerGroup | quote }}, apiGroup: rbac.authorization.k8s.io }
+  - { kind: Group, name: {{ .Values.rbac.developerGroup | quote }}, apiGroup: rbac.authorization.k8s.io }
+roleRef: { kind: ClusterRole, name: cloudforge-viewer, apiGroup: rbac.authorization.k8s.io }
+---
+# Developers: debug workloads (logs, exec, port-forward, restart, promote/abort rollouts)
+# but cannot read Secrets or change RBAC. Deploys happen via GitOps only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudforge-developer
+  labels: {{- include "platform.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["", apps, batch, autoscaling, policy, networking.k8s.io]
+    resources: [pods, pods/log, services, endpoints, configmaps, events, deployments, replicasets,
+                statefulsets, jobs, cronjobs, horizontalpodautoscalers, poddisruptionbudgets,
+                networkpolicies, ingresses, persistentvolumeclaims]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/exec, pods/portforward]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [patch]          # kubectl rollout restart
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list, watch, patch, update]   # kubectl argo rollouts promote/abort/retry
+  - apiGroups: [argoproj.io]
+    resources: [analysisruns, analysistemplates, experiments]
+    verbs: [get, list, watch]
+{{- range $name, $ns := .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudforge-developers
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+subjects:
+  - { kind: Group, name: {{ $.Values.rbac.developerGroup | quote }}, apiGroup: rbac.authorization.k8s.io }
+roleRef: { kind: ClusterRole, name: cloudforge-developer, apiGroup: rbac.authorization.k8s.io }
+{{- end }}
+---
+# CI identity: Jenkins only runs smoke checks / reads rollout status (deploys go through Git + Argo CD).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudforge-ci-readonly
+  labels: {{- include "platform.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["", apps]
+    resources: [pods, services, deployments]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, applications]
+    verbs: [get, list, watch]
+{{- range $name, $ns := .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudforge-ci-readonly
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.rbac.ciServiceAccount.name }}
+    namespace: {{ $.Values.rbac.ciServiceAccount.namespace }}
+roleRef: { kind: ClusterRole, name: cloudforge-ci-readonly, apiGroup: rbac.authorization.k8s.io }
+{{- end }}
+{{- end }}

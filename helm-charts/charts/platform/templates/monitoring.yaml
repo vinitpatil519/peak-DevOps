@@ -1,0 +1,72 @@
+{{- $m := .Values.monitoring }}
+{{- if $m.istioPodMonitor }}
+# Scrape every Envoy sidecar's merged endpoint (:15020/stats/prometheus): Istio standard metrics
+# plus the application's own /metrics (Istio metrics merging), without going through mTLS.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: istio-sidecars
+  namespace: {{ $m.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    {{- toYaml $m.labels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ join ", " (keys .Values.namespaces | sortAlpha) }}]
+  selector:
+    matchExpressions:
+      - { key: security.istio.io/tlsMode, operator: Exists }
+  podMetricsEndpoints:
+    - path: /stats/prometheus
+      interval: 15s
+      relabelings:
+        - action: keep
+          sourceLabels: [__meta_kubernetes_pod_container_name]
+          regex: istio-proxy
+        - action: replace
+          sourceLabels: [__address__]
+          regex: ([^:]+)(?::\d+)?
+          replacement: $1:15020
+          targetLabel: __address__
+        - action: replace
+          sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+          targetLabel: app
+        - action: replace
+          sourceLabels: [__meta_kubernetes_pod_label_rollouts_pod_template_hash]
+          targetLabel: rollouts_pod_template_hash
+---
+# istiod control-plane metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istiod
+  namespace: {{ $m.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    {{- toYaml $m.labels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [istio-system]
+  selector:
+    matchLabels: { app: istiod }
+  endpoints:
+    - { port: http-monitoring, interval: 30s }
+{{- end }}
+{{- if $m.dashboards }}
+{{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-{{ base $path | trimSuffix ".json" }}
+  namespace: {{ $m.namespace }}
+  labels:
+    {{- include "platform.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: CloudForge
+data:
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}

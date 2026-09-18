@@ -1,0 +1,120 @@
+# fluent/fluent-bit chart — DaemonSet tailing container logs, enriching with Kubernetes metadata,
+# parsing the apps' JSON logs and shipping to Loki.
+# helm upgrade --install fluent-bit fluent/fluent-bit -n monitoring -f monitoring/fluent-bit/values.yaml
+kind: DaemonSet
+
+serviceMonitor:
+  enabled: true
+  additionalLabels: { release: kube-prometheus-stack }
+
+podAnnotations:
+  sidecar.istio.io/inject: "false"
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }
+
+tolerations:
+  - operator: Exists
+    effect: NoSchedule
+
+config:
+  service: |
+    [SERVICE]
+        Daemon                Off
+        Flush                 2
+        Log_Level             info
+        Parsers_File          /fluent-bit/etc/parsers.conf
+        Parsers_File          /fluent-bit/etc/conf/custom_parsers.conf
+        HTTP_Server           On
+        HTTP_Listen           0.0.0.0
+        HTTP_Port             2020
+        Health_Check          On
+        storage.path          /var/fluent-bit/state/flb-storage/
+        storage.sync          normal
+        storage.backlog.mem_limit 16M
+
+  inputs: |
+    [INPUT]
+        Name                  tail
+        Tag                   kube.*
+        Path                  /var/log/containers/*.log
+        Exclude_Path          /var/log/containers/fluent-bit*.log
+        multiline.parser      docker, cri
+        DB                    /var/fluent-bit/state/flb_kube.db
+        Mem_Buf_Limit         10MB
+        Skip_Long_Lines       On
+        Refresh_Interval      10
+        storage.type          filesystem
+
+  filters: |
+    [FILTER]
+        Name                  kubernetes
+        Match                 kube.*
+        Merge_Log             On
+        Merge_Log_Key         app
+        Keep_Log              Off
+        K8S-Logging.Parser    On
+        K8S-Logging.Exclude   On
+        Labels                On
+        Annotations           Off
+
+    # Drop Envoy access-log noise from probes
+    [FILTER]
+        Name                  grep
+        Match                 kube.*
+        Exclude               log /(healthz|readyz|nginx-health|apache-health)/
+
+    [FILTER]
+        Name                  modify
+        Match                 kube.*
+        Add                   cluster ${CLUSTER_NAME}
+
+  outputs: |
+    [OUTPUT]
+        Name                  loki
+        Match                 kube.*
+        Host                  loki-gateway.monitoring.svc.cluster.local
+        Port                  80
+        Labels                job=fluent-bit, cluster=${CLUSTER_NAME}
+        Label_Keys            $kubernetes['namespace_name'],$kubernetes['pod_name'],$kubernetes['container_name'],$kubernetes['labels']['app.kubernetes.io/name']
+        Label_Map_Path        /fluent-bit/etc/conf/labelmap.json
+        Remove_Keys           kubernetes,stream
+        Line_Format           json
+        Auto_Kubernetes_Labels Off
+        Retry_Limit           10
+
+  customParsers: |
+    [PARSER]
+        Name                  json_app
+        Format                json
+        Time_Key              ts
+        Time_Format           %Y-%m-%dT%H:%M:%S%z
+        Time_Keep             On
+
+  extraFiles:
+    labelmap.json: |
+      {
+        "kubernetes": {
+          "namespace_name": "namespace",
+          "pod_name": "pod",
+          "container_name": "container",
+          "labels": { "app.kubernetes.io/name": "app" }
+        }
+      }
+
+env:
+  - name: CLUSTER_NAME
+    value: cloudforge-local
+
+daemonSetVolumes:
+  - name: varlog
+    hostPath: { path: /var/log }
+  - name: state
+    hostPath: { path: /var/fluent-bit/state, type: DirectoryOrCreate }
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+    readOnly: true
+  - name: state
+    mountPath: /var/fluent-bit/state

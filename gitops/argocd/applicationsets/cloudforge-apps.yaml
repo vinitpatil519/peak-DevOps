@@ -1,0 +1,88 @@
+# One ApplicationSet renders an Argo CD Application per (environment x chart).
+# Multi-source: chart from helm-charts/, values from gitops/environments/<env>/<chart>.yaml.
+# Sync waves order the tiers: platform -> data -> api -> proxy -> web.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cloudforge
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          # Cluster generator: register clusters with label cloudforge.dev/env=<local|eks>
+          # (the in-cluster secret is labelled by scripts/bootstrap-*.sh).
+          - clusters:
+              selector:
+                matchExpressions:
+                  - { key: cloudforge.dev/env, operator: In, values: [local, eks] }
+          - list:
+              elements:
+                - { chart: platform,     namespace: istio-system, wave: "0", project: cloudforge-platform }
+                - { chart: postgres,     namespace: database,     wave: "1", project: cloudforge }
+                - { chart: redis,        namespace: database,     wave: "1", project: cloudforge }
+                - { chart: backend,      namespace: backend,      wave: "2", project: cloudforge }
+                - { chart: apache-proxy, namespace: backend,      wave: "3", project: cloudforge }
+                - { chart: frontend,     namespace: frontend,     wave: "4", project: cloudforge }
+  template:
+    metadata:
+      name: '{{ .chart }}-{{ index .metadata.labels "cloudforge.dev/env" }}'
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{ .wave }}'
+        notifications.argoproj.io/subscribe.on-sync-failed.slack: cloudforge-deploys
+        notifications.argoproj.io/subscribe.on-health-degraded.slack: cloudforge-deploys
+      labels:
+        app.kubernetes.io/part-of: cloudforge
+        cloudforge.dev/env: '{{ index .metadata.labels "cloudforge.dev/env" }}'
+      finalizers: [resources-finalizer.argocd.argoproj.io]
+    spec:
+      project: '{{ .project }}'
+      sources:
+        - repoURL: https://github.com/vinitpatil519/CloudForge.git
+          targetRevision: main
+          path: 'helm-charts/charts/{{ .chart }}'
+          helm:
+            releaseName: '{{ .chart }}'
+            valueFiles:
+              - values.yaml
+              - '$values/gitops/environments/{{ index .metadata.labels "cloudforge.dev/env" }}/{{ .chart }}.yaml'
+        - repoURL: https://github.com/vinitpatil519/CloudForge.git
+          targetRevision: main
+          ref: values
+      destination:
+        server: '{{ .server }}'
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=false          # namespaces (with PSS/istio labels) come from the platform chart
+          - ServerSideApply=true
+          - PruneLast=true
+          - ApplyOutOfSyncOnly=true
+          - SkipDryRunOnMissingResource=true   # CRDs arrive from the add-ons appset; retry covers the gap
+        retry:
+          limit: 5
+          backoff: { duration: 10s, factor: 2, maxDuration: 3m }
+      ignoreDifferences:
+        # HPA owns replicas; Argo Rollouts owns VirtualService weights / DestinationRule subset hashes
+        # and the blue/green Service selectors.
+        - group: apps
+          kind: Deployment
+          jsonPointers: [/spec/replicas]
+        - group: argoproj.io
+          kind: Rollout
+          jsonPointers: [/spec/replicas]
+        - group: networking.istio.io
+          kind: VirtualService
+          jqPathExpressions: ['.spec.http[].route[].weight']
+        - group: networking.istio.io
+          kind: DestinationRule
+          jqPathExpressions: ['.spec.subsets[].labels']
+        - group: ""
+          kind: Service
+          jqPathExpressions: ['.spec.selector["rollouts-pod-template-hash"]']
+      revisionHistoryLimit: 10

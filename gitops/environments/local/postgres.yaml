@@ -1,0 +1,9 @@
+# Local overrides for charts/postgres (kind 'standard' = local-path provisioner).
+persistence:
+  size: 2Gi
+  storageClass: standard
+backup:
+  size: 2Gi
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 512Mi }

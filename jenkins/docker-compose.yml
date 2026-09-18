@@ -1,0 +1,64 @@
+# Local CI stack: Jenkins (JCasC) + SonarQube Community + Postgres for SonarQube.
+#   docker compose -f jenkins/docker-compose.yml up -d --build
+#   sudo mkdir -p /var/jenkins_home && sudo chown 1000:1000 /var/jenkins_home   (first time)
+#   Jenkins   http://localhost:8081   (admin password: JENKINS_ADMIN_PASSWORD in jenkins/.env)
+#   SonarQube http://localhost:9000   (admin/admin on first login -> change, create token)
+# SonarQube needs vm.max_map_count>=524288 on the Docker host:
+#   Linux: sudo sysctl -w vm.max_map_count=524288
+#   Docker Desktop/WSL2: wsl -d docker-desktop sysctl -w vm.max_map_count=524288
+name: cloudforge-ci
+
+services:
+  jenkins:
+    build: .
+    image: cloudforge/jenkins:lts
+    restart: unless-stopped
+    ports: ["8081:8080", "50000:50000"]
+    environment:
+      CASC_JENKINS_CONFIG: /var/jenkins_home/casc/jenkins.yaml
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false -Xmx1g
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:?set in jenkins/.env}
+      GITHUB_USER: ${GITHUB_USER:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SONAR_TOKEN: ${SONAR_TOKEN:-}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      REPO_URL: ${REPO_URL:-https://github.com/vinitpatil519/CloudForge.git}
+    volumes:
+      # Same path inside and outside the container so sibling containers started by the
+      # pipeline (docker run -v $WORKSPACE:...) see the workspace. Run compose from Linux/WSL2.
+      - ${JENKINS_HOME_HOST:-/var/jenkins_home}:/var/jenkins_home
+      - ./casc:/var/jenkins_home/casc:ro
+      # Docker-outside-of-Docker: pipeline stages run containers on the host daemon.
+      # Security note: this grants root-equivalent access to the host; acceptable only for a
+      # single-user local lab. Use Kubernetes agents or rootless BuildKit in shared environments.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add: ["${DOCKER_GID:-0}"]
+
+  sonarqube:
+    image: sonarqube:25.9.0.112764-community
+    restart: unless-stopped
+    depends_on: [sonar-db]
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonar-db:5432/sonar
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD:?set in jenkins/.env}
+    ports: ["9000:9000"]
+    volumes:
+      - sonar_data:/opt/sonarqube/data
+      - sonar_extensions:/opt/sonarqube/extensions
+      - sonar_logs:/opt/sonarqube/logs
+
+  sonar-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: ${SONAR_DB_PASSWORD}
+      POSTGRES_DB: sonar
+    volumes: [sonar_pg:/var/lib/postgresql/data]
+
+volumes:
+  sonar_data:
+  sonar_extensions:
+  sonar_logs:
+  sonar_pg:

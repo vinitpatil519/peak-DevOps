@@ -1,0 +1,56 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- range $name, $ns := .Values.namespaces }}
+---
+# Zero-trust baseline: deny all traffic in the namespace; workloads opt in with their own policies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $.Values.networkPolicy.dnsNamespace }} }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+{{- if $ns.istioInjection }}
+---
+# Sidecars need xDS/CA from istiod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-istiod-egress
+  namespace: {{ $name }}
+  labels: {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $.Values.networkPolicy.istioNamespace }} }
+          podSelector:
+            matchLabels: { app: istiod }
+      ports:
+        - { port: 15012, protocol: TCP }
+        - { port: 15017, protocol: TCP }
+{{- end }}
+{{- end }}
+{{- end }}

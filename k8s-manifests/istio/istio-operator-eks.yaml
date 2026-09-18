@@ -1,0 +1,25 @@
+# EKS overlay: layer after the base file.
+#   istioctl install -y -f k8s-manifests/istio/istio-operator.yaml -f k8s-manifests/istio/istio-operator-eks.yaml
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: cloudforge
+  namespace: istio-system
+spec:
+  components:
+    pilot:
+      k8s:
+        replicaCount: 2
+        hpaSpec: { minReplicas: 2, maxReplicas: 5 }
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          hpaSpec: { minReplicas: 2, maxReplicas: 6 }
+          service:
+            type: LoadBalancer
+          serviceAnnotations:
+            service.beta.kubernetes.io/aws-load-balancer-type: external
+            service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+            service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+            external-dns.alpha.kubernetes.io/hostname: mesh.cloudforge.example.com

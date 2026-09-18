@@ -1,0 +1,10 @@
+apiVersion: v2
+name: backend
+description: CloudForge FastAPI backend (Deployment or Argo Rollouts canary with Istio traffic shifting)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.30.0-0"
+keywords: [fastapi, api, canary, istio]
+maintainers:
+  - name: CloudForge Platform Team

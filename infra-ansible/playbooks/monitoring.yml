@@ -1,0 +1,8 @@
+---
+# Installs kube-prometheus-stack, Loki and Fluent Bit into the current cluster
+# (use when not letting Argo CD manage add-ons).
+- name: Cluster monitoring stack
+  hosts: workstation
+  become: false
+  roles:
+    - monitoring

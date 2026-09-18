@@ -1,0 +1,43 @@
+:root {
+  --bg: #f7f7f5;
+  --fg: #1b1b1f;
+  --muted: #6b6b76;
+  --card: #ffffff;
+  --line: #e4e4e0;
+  --accent: #2f5bd3;
+  --danger: #b3261e;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15161a;
+    --fg: #ececf1;
+    --muted: #9a9aa6;
+    --card: #1e1f24;
+    --line: #2c2d33;
+    --accent: #7c9cff;
+    --danger: #ff8a80;
+  }
+}
+body { margin: 0; background: var(--bg); }
+main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { margin: 0; font-size: 1.6rem; }
+h2 { font-size: 1.1rem; margin-top: 32px; }
+.meta { color: var(--muted); font-size: 0.85rem; }
+.error { color: var(--danger); border: 1px solid var(--danger); padding: 8px 12px; border-radius: 6px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 20px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.tile-label { color: var(--muted); font-size: 0.8rem; }
+.tile-value { font-size: 1.5rem; font-variant-numeric: tabular-nums; margin-top: 4px; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+th, td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+input { padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
+button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.inline { display: block; margin-bottom: 12px; color: var(--muted); }
+.orders { padding-left: 18px; color: var(--muted); }

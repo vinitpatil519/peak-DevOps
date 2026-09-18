@@ -1,0 +1,3 @@
+---
+kube_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+kube_bin_dir: /usr/local/bin

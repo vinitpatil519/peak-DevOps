@@ -1,0 +1,8 @@
+-r requirements.txt
+pytest==8.4.2
+pytest-asyncio==1.2.0
+pytest-cov==7.0.0
+httpx==0.28.1
+aiosqlite==0.21.0
+fakeredis==2.31.3
+ruff==0.13.2

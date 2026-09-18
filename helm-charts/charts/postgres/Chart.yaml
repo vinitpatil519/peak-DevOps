@@ -1,0 +1,7 @@
+apiVersion: v2
+name: postgres
+description: CloudForge PostgreSQL (single-primary StatefulSet with exporter and scheduled logical backups)
+type: application
+version: 1.0.0
+appVersion: "17"
+kubeVersion: ">=1.30.0-0"

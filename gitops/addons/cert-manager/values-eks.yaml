@@ -1,0 +1,7 @@
+# Route53 DNS-01 via EKS Pod Identity (association for SA cert-manager/cert-manager in Terraform).
+replicaCount: 2
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+serviceAccount:
+  name: cert-manager

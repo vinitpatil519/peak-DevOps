@@ -1,0 +1,8 @@
+# Local overrides for charts/apache-proxy. Jenkins bumps image.tag here.
+image:
+  repository: cloudforge/apache-proxy
+  tag: "local"
+  pullPolicy: IfNotPresent
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 3

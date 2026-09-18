@@ -1,0 +1,5 @@
+# Accepted findings. Every entry needs an owner, reason and expiry date (review monthly).
+# Format: <ID> exp:<YYYY-MM-DD>
+#
+# Example:
+# CVE-2024-00000 exp:2026-12-31   # owner: platform-team; not reachable: vulnerable fn unused

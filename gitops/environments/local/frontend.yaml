@@ -1,0 +1,16 @@
+# Local overrides for charts/frontend. Jenkins bumps image.tag here.
+image:
+  repository: cloudforge/web
+  tag: "local"
+  pullPolicy: IfNotPresent
+rollout:
+  enabled: true
+  autoPromotionEnabled: false
+ingress:
+  host: cloudforge.local
+  previewHost: preview.cloudforge.local
+  tls:
+    enabled: false
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4

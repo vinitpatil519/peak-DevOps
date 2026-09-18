@@ -1,0 +1,152 @@
+# -- CloudForge backend API
+nameOverride: ""
+fullnameOverride: "backend-api"
+
+image:
+  repository: cloudforge/api
+  tag: ""            # defaults to .Chart.AppVersion; Jenkins writes the immutable git-sha tag here
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+revisionHistoryLimit: 5
+
+# Rollout strategy. When rollout.enabled=true an Argo Rollout (canary) replaces the Deployment.
+rollout:
+  enabled: false
+  canary:
+    steps:
+      - setWeight: 10
+      - pause: { duration: 2m }
+      - analysis:
+          templates:
+            - templateName: backend-success-rate
+          args:
+            - name: canary-hash
+              valueFrom:
+                podTemplateHashValue: Latest
+      - setWeight: 25
+      - pause: { duration: 2m }
+      - setWeight: 50
+      - pause: { duration: 5m }
+      - setWeight: 100
+  analysis:
+    prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+    successRateThreshold: 0.99
+    p95LatencyThresholdSeconds: 0.5
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}    # EKS: Pod Identity needs no annotation; IRSA would use eks.amazonaws.com/role-arn
+
+service:
+  type: ClusterIP
+  port: 8000
+
+config:
+  CF_ENVIRONMENT: local
+  CF_LOG_LEVEL: INFO
+  CF_DB_HOST: postgres.database.svc.cluster.local
+  CF_DB_PORT: "5432"
+  CF_DB_NAME: cloudforge
+  CF_DB_USER: cloudforge
+  CF_REDIS_HOST: redis.database.svc.cluster.local
+  CF_REDIS_PORT: "6379"
+  CF_CACHE_TTL_SECONDS: "60"
+  WEB_CONCURRENCY: "1"
+
+# Credentials. Expected keys: CF_DB_PASSWORD, CF_REDIS_PASSWORD
+secret:
+  create: false              # true only for throwaway demos; values end up in Git/Helm history
+  existingSecret: backend-credentials
+  data: {}
+externalSecret:
+  enabled: false             # EKS: sync from AWS Secrets Manager via External Secrets Operator
+  secretStoreRef: { kind: ClusterSecretStore, name: aws-secrets-manager }
+  refreshInterval: 1h
+  remoteKey: cloudforge/dev/backend
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { memory: 384Mi }
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: { type: RuntimeDefault }
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+
+probes:
+  startup: { path: /healthz, failureThreshold: 30, periodSeconds: 2 }
+  liveness: { path: /healthz, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3 }
+  readiness: { path: /readyz, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 3 }
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies: [{ type: Percent, value: 100, periodSeconds: 30 }]
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{ type: Percent, value: 50, periodSeconds: 60 }]
+
+# VPA in recommendation mode only (Off) so it never fights the HPA over CPU/memory.
+vpa:
+  enabled: false
+  updateMode: "Off"
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Callers allowed to reach the API (Apache proxy tier)
+  ingressFrom:
+    - podSelector: { matchLabels: { app.kubernetes.io/name: apache-proxy } }
+  monitoringNamespace: monitoring
+  databaseNamespace: database
+
+istio:
+  enabled: true
+  # VirtualService/DestinationRule are always rendered when istio.enabled so the Rollout can
+  # shift weights; with plain Deployments they just route 100% to 'stable'.
+  retries: { attempts: 2, perTryTimeout: 5s, retryOn: "5xx,reset,connect-failure,refused-stream" }
+  timeout: 15s
+  outlierDetection:
+    consecutive5xxErrors: 5
+    interval: 10s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 50
+  connectionPool:
+    tcp: { maxConnections: 200 }
+    http: { http1MaxPendingRequests: 100, maxRequestsPerConnection: 0 }
+  # Callers allowed by AuthorizationPolicy (SPIFFE principals)
+  allowedPrincipals:
+    - cluster.local/ns/backend/sa/apache-proxy
+
+metrics:
+  serviceMonitor:
+    enabled: false           # enable when NOT using Istio metrics merging (plain clusters)
+    interval: 15s
+    labels: { release: kube-prometheus-stack }

@@ -1,0 +1,12 @@
+# argo/argo-rollouts chart
+# helm upgrade --install argo-rollouts argo/argo-rollouts -n argo-rollouts --create-namespace -f monitoring/argo-rollouts/values.yaml
+controller:
+  replicas: 1
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels: { release: kube-prometheus-stack }
+dashboard:
+  enabled: true
+  readonly: true

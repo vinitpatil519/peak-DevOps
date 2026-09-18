@@ -1,0 +1,15 @@
+---
+monitoring_values_suffix: ""          # "-eks" to layer EKS overrides
+monitoring_charts:
+  - name: kube-prometheus-stack
+    chart: prometheus-community/kube-prometheus-stack
+    version: "77.12.0"
+    values: monitoring/kube-prometheus-stack
+  - name: loki
+    chart: grafana/loki
+    version: "6.41.1"
+    values: monitoring/loki
+  - name: fluent-bit
+    chart: fluent/fluent-bit
+    version: "0.53.0"
+    values: monitoring/fluent-bit

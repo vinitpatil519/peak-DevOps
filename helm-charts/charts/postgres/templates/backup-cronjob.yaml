@@ -1,0 +1,97 @@
+{{- if .Values.backup.enabled }}
+# Nightly logical backup (pg_dump custom format) to a dedicated PVC with retention pruning.
+# On EKS swap the PVC for an S3 upload (the s3 Terraform module creates the bucket).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "pg.fullname" . }}-backup
+  labels: {{- include "pg.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pg.fullname" . }}-backups
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests: { storage: {{ .Values.backup.size }} }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pg.fullname" . }}-backup
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: {{ include "pg.fullname" . }}-backup }
+          annotations:
+            sidecar.istio.io/inject: "true"
+            proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
+        spec:
+          serviceAccountName: {{ include "pg.fullname" . }}-backup
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: pg-dump
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              env:
+                - { name: PGHOST, value: {{ include "pg.fullname" . }} }
+                - { name: PGUSER, value: {{ .Values.username | quote }} }
+                - { name: PGDATABASE, value: {{ .Values.database | quote }} }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ include "pg.secret" . }}, key: password } }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | quote }} }
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  trap 'wget -qO- --post-data="" http://127.0.0.1:15020/quitquitquit >/dev/null 2>&1 || true' EXIT
+                  f="/backups/${PGDATABASE}-$(date -u +%Y%m%dT%H%M%SZ).dump"
+                  pg_dump --format=custom --no-owner --file="$f"
+                  pg_restore --list "$f" >/dev/null   # verify archive is readable
+                  find /backups -name '*.dump' -mtime +"$RETENTION_DAYS" -delete
+                  echo "backup ok: $f ($(du -h "$f" | cut -f1))"
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+              securityContext: {{- include "pg.restricted" . | nindent 16 }}
+              volumeMounts:
+                - { name: backups, mountPath: /backups }
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: {{ include "pg.fullname" . }}-backups }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pg.fullname" . }}-backup
+  labels: {{- include "pg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: {{ include "pg.fullname" . }}-backup }
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "pg.selectorLabels" . | nindent 14 }}
+      ports: [{ port: 5432, protocol: TCP }]
+{{- end }}

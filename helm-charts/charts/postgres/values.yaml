@@ -1,0 +1,66 @@
+# Single-primary PostgreSQL for dev/demo. For production on AWS prefer Amazon RDS/Aurora
+# (Multi-AZ, PITR) or an operator such as CloudNativePG; this chart keeps the platform self-contained.
+fullnameOverride: postgres
+
+image:
+  repository: postgres
+  tag: "17.6-alpine"
+  pullPolicy: IfNotPresent
+
+database: cloudforge
+username: cloudforge
+
+# Expected keys: password
+auth:
+  existingSecret: postgres-credentials
+  createSecret: false
+  password: ""
+externalSecret:
+  enabled: false
+  secretStoreRef: { kind: ClusterSecretStore, name: aws-secrets-manager }
+  remoteKey: cloudforge/dev/backend
+
+persistence:
+  size: 5Gi
+  storageClass: ""        # kind: standard (local-path); EKS: gp3
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+
+config:
+  max_connections: "100"
+  shared_buffers: 128MB
+  effective_cache_size: 384MB
+  work_mem: 4MB
+  log_min_duration_statement: "500"
+  log_line_prefix: "%m [%p] %u@%d "
+
+exporter:
+  enabled: true
+  image: quay.io/prometheuscommunity/postgres-exporter:v0.18.1
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 7
+  size: 5Gi
+
+pdb:
+  enabled: true
+  maxUnavailable: 0        # single replica: block voluntary eviction; drain requires manual action
+
+networkPolicy:
+  enabled: true
+  clientNamespaces: [backend]
+  monitoringNamespace: monitoring
+
+istio:
+  enabled: true
+  allowedPrincipals:
+    - cluster.local/ns/backend/sa/backend-api
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }

@@ -1,0 +1,65 @@
+# AppProject: scopes what CloudForge Applications may deploy and where.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: cloudforge
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  description: CloudForge Platform workloads
+  sourceRepos:
+    - https://github.com/vinitpatil519/CloudForge.git
+  destinations:
+    - { server: https://kubernetes.default.svc, namespace: frontend }
+    - { server: https://kubernetes.default.svc, namespace: backend }
+    - { server: https://kubernetes.default.svc, namespace: database }
+    - { server: https://kubernetes.default.svc, namespace: monitoring }
+    - { server: https://kubernetes.default.svc, namespace: istio-system }
+  # Cluster-scoped kinds the platform chart manages
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+    - { group: rbac.authorization.k8s.io, kind: ClusterRole }
+    - { group: rbac.authorization.k8s.io, kind: ClusterRoleBinding }
+    - { group: cert-manager.io, kind: ClusterIssuer }
+  namespaceResourceBlacklist:
+    - { group: "", kind: ResourceQuota }   # only the platform app may set quotas (see below)
+  namespaceResourceWhitelist:
+    - { group: "*", kind: "*" }
+  orphanedResources:
+    warn: true
+  roles:
+    - name: developer
+      description: Sync and inspect CloudForge apps; no deletes
+      policies:
+        - p, proj:cloudforge:developer, applications, get, cloudforge/*, allow
+        - p, proj:cloudforge:developer, applications, sync, cloudforge/*, allow
+        - p, proj:cloudforge:developer, applications, action/argoproj.io/Rollout/*, cloudforge/*, allow
+        - p, proj:cloudforge:developer, logs, get, cloudforge/*, allow
+      groups: [cloudforge:developers]
+    - name: ci
+      description: Jenkins may read app status to gate the pipeline
+      policies:
+        - p, proj:cloudforge:ci, applications, get, cloudforge/*, allow
+  syncWindows:
+    # Freeze automatic prod syncs on weekends; manual syncs still allowed.
+    - kind: deny
+      schedule: "0 0 * * 6"
+      duration: 48h
+      applications: ["*-prod"]
+      manualSync: true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: cloudforge-platform
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  description: Cluster add-ons and the CloudForge platform layer (namespaces, quotas, mesh policy)
+  sourceRepos: ["*"]
+  destinations:
+    - { server: https://kubernetes.default.svc, namespace: "*" }
+  clusterResourceWhitelist:
+    - { group: "*", kind: "*" }
+  namespaceResourceWhitelist:
+    - { group: "*", kind: "*" }

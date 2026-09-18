@@ -1,0 +1,10 @@
+apiVersion: v2
+name: platform
+description: >-
+  CloudForge cross-cutting platform layer: namespaces + Pod Security Standards, quotas,
+  baseline NetworkPolicies, Istio mesh security and edge routing, RBAC, cert-manager issuers,
+  Prometheus alert rules, Istio scrape config and Grafana dashboards.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.30.0-0"

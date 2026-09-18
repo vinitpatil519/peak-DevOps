@@ -1,0 +1,19 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is git-ignored)
+region             = "us-east-1"
+kubernetes_version = "1.34"
+
+# Your public IP (curl -s https://checkip.amazonaws.com)/32 — never leave 0.0.0.0/0 in real use.
+api_allowed_cidrs = ["203.0.113.10/32"]
+
+admin_principal_arns = [
+  "arn:aws:iam::123456789012:role/Admin",
+]
+developer_principal_arns = []
+
+domain          = "cloudforge.example.com"
+create_dns_zone = true
+
+# Cost knobs
+single_nat_gateway = true
+app_capacity_type  = "SPOT"
+demo_mode          = true

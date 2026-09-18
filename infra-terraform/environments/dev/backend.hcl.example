@@ -1,0 +1,3 @@
+# cp backend.hcl.example backend.hcl  (bucket name = bootstrap output state_bucket)
+bucket = "cloudforge-tfstate-123456789012"
+region = "us-east-1"

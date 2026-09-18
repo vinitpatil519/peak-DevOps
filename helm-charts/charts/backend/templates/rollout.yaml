@@ -1,0 +1,34 @@
+{{- if .Values.rollout.enabled }}
+# Canary: Argo Rollouts shifts traffic between the 'stable' and 'canary' DestinationRule subsets
+# by rewriting weights in the Istio VirtualService, gated by Prometheus analysis.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels: {{- include "backend.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels: {{- include "backend.selectorLabels" . | nindent 6 }}
+  template:
+    {{- include "backend.podTemplate" . | nindent 4 }}
+  strategy:
+    canary:
+      maxSurge: "25%"
+      maxUnavailable: 0
+      dynamicStableScale: true
+      abortScaleDownDelaySeconds: 30
+      trafficRouting:
+        istio:
+          virtualService:
+            name: {{ include "backend.fullname" . }}
+            routes: [primary]
+          destinationRule:
+            name: {{ include "backend.fullname" . }}
+            canarySubsetName: canary
+            stableSubsetName: stable
+      steps: {{- toYaml .Values.rollout.canary.steps | nindent 8 }}
+{{- end }}

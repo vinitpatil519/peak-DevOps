@@ -1,0 +1,217 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+data:
+  BACKEND_URL: {{ .Values.backendUrl | quote }}
+  LISTEN_PORT: {{ .Values.service.port | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: {{- include "apache.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "apache.labels" . | nindent 8 }}
+        version: {{ include "apache.tag" . | quote }}
+      annotations:
+        checksum/config: {{ .Values.backendUrl | sha256sum }}
+        {{- if .Values.istio.enabled }}
+        sidecar.istio.io/inject: "true"
+        proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "apache.fullname" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 82
+        runAsGroup: 82
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: httpd
+          image: "{{ .Values.image.repository }}:{{ include "apache.tag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: { name: {{ include "apache.fullname" . }} }
+          ports:
+            - { name: http, containerPort: {{ .Values.service.port }}, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /apache-health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /apache-health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["/bin/sh", "-c", "sleep 5"] }
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: logs, mountPath: /usr/local/apache2/logs }
+        {{- if .Values.exporter.enabled }}
+        - name: exporter
+          image: {{ .Values.exporter.image }}
+          args: ["--scrape_uri=http://127.0.0.1:{{ .Values.service.port }}/server-status?auto"]
+          ports:
+            - { name: metrics, containerPort: 9117, protocol: TCP }
+          resources: {{ toYaml .Values.exporter.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+        {{- end }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 16Mi } }
+        - { name: logs, emptyDir: { sizeLimit: 16Mi } }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "apache.selectorLabels" . | nindent 14 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "apache.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.service.port }}, targetPort: http, appProtocol: http }
+    {{- if .Values.exporter.enabled }}
+    - { name: http-metrics, port: 9117, targetPort: metrics }
+    {{- end }}
+{{- if .Values.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ include "apache.fullname" . }} }
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }} }
+{{- end }}
+{{- if .Values.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels: {{- include "apache.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "apache.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.frontendNamespace }} }
+      ports: [{ port: {{ .Values.service.port }}, protocol: TCP }]
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }} }
+      ports: [{ port: 9117, protocol: TCP }, { port: 15020, protocol: TCP }]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: backend-api }
+      ports: [{ port: 8000, protocol: TCP }]
+{{- end }}
+{{- if .Values.istio.enabled }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "apache.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: {{- toYaml .Values.istio.allowedPrincipals | nindent 14 }}
+      to:
+        - operation: { ports: ["{{ .Values.service.port }}"], paths: ["/api/*"] }
+    # Prometheus is outside the mesh; exporter port is PERMISSIVE (see PeerAuthentication below).
+    - to:
+        - operation: { ports: ["9117"] }
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "apache.fullname" . }}-metrics
+  labels: {{- include "apache.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "apache.selectorLabels" . | nindent 6 }}
+  mtls: { mode: STRICT }
+  portLevelMtls:
+    "9117": { mode: PERMISSIVE }
+{{- end }}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "apache.fullname" . }}
+  labels:
+    {{- include "apache.labels" . | nindent 4 }}
+    {{- toYaml .Values.metrics.serviceMonitor.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "apache.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - { port: http-metrics, interval: 30s }
+{{- end }}

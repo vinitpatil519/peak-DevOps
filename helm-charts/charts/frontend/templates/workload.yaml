@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+{{- if .Values.rollout.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: {{- include "frontend.selectorLabels" . | nindent 6 }}
+  template:
+    {{- include "frontend.podTemplate" . | nindent 4 }}
+  strategy:
+    blueGreen:
+      activeService: {{ include "frontend.fullname" . }}
+      previewService: {{ include "frontend.fullname" . }}-preview
+      autoPromotionEnabled: {{ .Values.rollout.autoPromotionEnabled }}
+      {{- if .Values.rollout.autoPromotionSeconds }}
+      autoPromotionSeconds: {{ .Values.rollout.autoPromotionSeconds }}
+      {{- end }}
+      scaleDownDelaySeconds: {{ .Values.rollout.scaleDownDelaySeconds }}
+      {{- if .Values.rollout.prePromotionAnalysis }}
+      prePromotionAnalysis:
+        templates:
+          - templateName: frontend-smoke-test
+        args:
+          - name: preview-url
+            value: http://{{ include "frontend.fullname" . }}-preview.{{ .Release.Namespace }}.svc.cluster.local
+      {{- end }}
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 25%, maxUnavailable: 0 }
+  selector:
+    matchLabels: {{- include "frontend.selectorLabels" . | nindent 6 }}
+  template:
+    {{- include "frontend.podTemplate" . | nindent 4 }}
+{{- end }}
+---
+# Active service (production traffic). During blue/green Argo Rollouts pins its selector
+# to the active ReplicaSet hash.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "frontend.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.service.port }}, targetPort: http, appProtocol: http }
+{{- if .Values.rollout.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "frontend.fullname" . }}-preview
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "frontend.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.service.port }}, targetPort: http, appProtocol: http }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: frontend-smoke-test
+  labels: {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: preview-url
+  metrics:
+    - name: smoke
+      count: 1
+      provider:
+        job:
+          spec:
+            backoffLimit: 1
+            activeDeadlineSeconds: 120
+            template:
+              metadata:
+                labels: { app.kubernetes.io/name: frontend-smoke-test }
+                annotations: { sidecar.istio.io/inject: "true" }
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 65534
+                  seccompProfile: { type: RuntimeDefault }
+                containers:
+                  - name: smoke
+                    image: curlimages/curl:8.16.0
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities: { drop: [ALL] }
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - |
+                        set -e
+                        # Wait for sidecar, run checks, then stop the sidecar so the Job completes.
+                        until curl -fsS http://127.0.0.1:15021/healthz/ready >/dev/null; do sleep 1; done
+                        trap 'curl -fsS -X POST http://127.0.0.1:15020/quitquitquit >/dev/null || true' EXIT
+                        curl -fsS "{{ "{{" }}args.preview-url{{ "}}" }}/nginx-health"
+                        curl -fsS "{{ "{{" }}args.preview-url{{ "}}" }}/" | grep -q '<div id="root">'
+                        curl -fsS "{{ "{{" }}args.preview-url{{ "}}" }}/api/v1/info" | grep -q cloudforge-api
+{{- end }}

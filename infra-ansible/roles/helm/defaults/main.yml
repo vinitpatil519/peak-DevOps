@@ -1,0 +1,14 @@
+---
+helm_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+helm_bin_dir: /usr/local/bin
+helm_repositories:
+  - { name: prometheus-community, url: "https://prometheus-community.github.io/helm-charts" }
+  - { name: grafana, url: "https://grafana.github.io/helm-charts" }
+  - { name: fluent, url: "https://fluent.github.io/helm-charts" }
+  - { name: ingress-nginx, url: "https://kubernetes.github.io/ingress-nginx" }
+  - { name: jetstack, url: "https://charts.jetstack.io" }
+  - { name: argo, url: "https://argoproj.github.io/argo-helm" }
+  - { name: istio, url: "https://istio-release.storage.googleapis.com/charts" }
+  - { name: metrics-server, url: "https://kubernetes-sigs.github.io/metrics-server/" }
+helm_plugins:
+  - https://github.com/databus23/helm-diff

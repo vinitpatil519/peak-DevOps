@@ -1,0 +1,43 @@
+# Applied by scripts/bootstrap-*.sh on top of the upstream Argo CD install.
+# - Health checks for Argo Rollouts are built in; this adds resource exclusions and
+#   ignores noisy fields cluster-wide.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  application.resourceTrackingMethod: annotation
+  timeout.reconciliation: 120s
+  resource.exclusions: |
+    - apiGroups: ["cilium.io"]
+      kinds: ["CiliumIdentity"]
+      clusters: ["*"]
+    - apiGroups: ["kyverno.io", "reports.kyverno.io", "wgpolicyk8s.io"]
+      kinds: ["PolicyReport", "ClusterPolicyReport", "EphemeralReport"]
+      clusters: ["*"]
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_MutatingWebhookConfiguration: |
+    jqPathExpressions:
+      - .webhooks[]?.clientConfig.caBundle
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_ValidatingWebhookConfiguration: |
+    jqPathExpressions:
+      - .webhooks[]?.clientConfig.caBundle
+      - .webhooks[]?.failurePolicy
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-rbac-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  policy.default: role:readonly
+  policy.csv: |
+    g, cloudforge:platform-admins, role:admin
+    g, cloudforge:developers, proj:cloudforge:developer
+  scopes: "[groups]"

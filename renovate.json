@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", ":dependencyDashboard"],
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 10,
+  "packageRules": [
+    { "matchUpdateTypes": ["minor", "patch"], "matchManagers": ["pip_requirements", "npm"], "groupName": "app dependencies" },
+    { "matchManagers": ["dockerfile", "docker-compose"], "groupName": "base images" },
+    { "matchManagers": ["terraform"], "groupName": "terraform providers" },
+    { "matchManagers": ["argocd", "helm-values"], "groupName": "cluster add-ons" },
+    { "matchUpdateTypes": ["major"], "dependencyDashboardApproval": true }
+  ],
+  "argocd": { "fileMatch": ["^gitops/.+\\.ya?ml$"] },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Add-on chart versions in bootstrap scripts",
+      "fileMatch": ["^scripts/lib\\.sh$"],
+      "matchStrings": ["V_KPS=\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "kube-prometheus-stack",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://prometheus-community.github.io/helm-charts"
+    },
+    {
+      "customType": "regex",
+      "description": "CLI versions in Ansible group_vars",
+      "fileMatch": ["^infra-ansible/inventories/.+/group_vars/all\\.yml$"],
+      "matchStrings": ["kubectl_version: \"(?<currentValue>v[^\"]+)\""],
+      "depNameTemplate": "kubernetes/kubernetes",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
+}

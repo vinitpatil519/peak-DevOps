@@ -1,0 +1,62 @@
+fullnameOverride: frontend
+
+image:
+  repository: cloudforge/web
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+apiUpstreamHost: apache-proxy.backend.svc.cluster.local:8080
+
+# Blue/Green via Argo Rollouts: new ReplicaSet comes up behind the preview Service,
+# smoke-test analysis runs, then an operator (or autoPromotion) flips the active Service.
+rollout:
+  enabled: false
+  autoPromotionEnabled: false
+  autoPromotionSeconds: 0
+  scaleDownDelaySeconds: 60
+  prePromotionAnalysis: true
+
+service:
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  host: cloudforge.local
+  tls:
+    enabled: false
+    secretName: cloudforge-tls
+    clusterIssuer: letsencrypt-staging   # used when cert-manager is installed
+  annotations: {}
+  # ingress-nginx pods carry an Istio sidecar (inbound excluded) so they can speak mTLS to the mesh.
+  meshAware: true
+  previewHost: preview.cloudforge.local  # blue/green preview endpoint (rollout.enabled only)
+
+resources:
+  requests: { cpu: 25m, memory: 32Mi }
+  limits: { memory: 128Mi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces: [ingress-nginx, istio-system]
+  backendNamespace: backend
+  monitoringNamespace: monitoring
+
+istio:
+  enabled: true
+  allowedPrincipals:
+    - cluster.local/ns/ingress-nginx/sa/ingress-nginx
+    - cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account

@@ -1,0 +1,54 @@
+---
+# Deploys the jenkins/ docker compose stack (Jenkins LTS + JCasC, SonarQube, Postgres).
+- name: Create Jenkins home (same path on host and in container for Docker-outside-of-Docker)
+  ansible.builtin.file:
+    path: "{{ jenkins_home }}"
+    state: directory
+    owner: "{{ jenkins_uid }}"
+    group: "{{ jenkins_uid }}"
+    mode: "0750"
+
+- name: Copy CI stack
+  ansible.posix.synchronize:
+    src: "{{ jenkins_repo_root }}/jenkins/"
+    dest: "{{ jenkins_stack_dir }}/"
+    delete: false
+    rsync_opts: ["--exclude=.env"]
+
+- name: Look up docker group id
+  ansible.builtin.getent:
+    database: group
+    key: docker
+
+- name: Render .env (secrets from environment variables, never committed)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ jenkins_stack_dir }}/.env"
+    mode: "0600"
+  no_log: true
+
+- name: Start CI stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ jenkins_stack_dir }}"
+    build: always
+    state: present
+    pull: missing
+  register: ci_stack
+
+- name: Wait for Jenkins
+  ansible.builtin.uri:
+    url: http://localhost:8081/login
+    status_code: 200
+  register: jenkins_up
+  retries: 30
+  delay: 10
+  until: jenkins_up.status == 200
+
+- name: Wait for SonarQube
+  ansible.builtin.uri:
+    url: http://localhost:9000/api/system/status
+    return_content: true
+  register: sonar_up
+  retries: 40
+  delay: 10
+  until: sonar_up.json is defined and sonar_up.json.status == 'UP'

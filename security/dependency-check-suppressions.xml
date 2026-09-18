@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OWASP Dependency-Check suppressions. Each suppression must state why and until when. -->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+  <!--
+  <suppress until="2026-12-31Z">
+    <notes>False positive: CPE matches a different project with the same name. Owner: platform-team.</notes>
+    <packageUrl regex="true">^pkg:pypi/example@.*$</packageUrl>
+    <cve>CVE-2024-00000</cve>
+  </suppress>
+  -->
+</suppressions>

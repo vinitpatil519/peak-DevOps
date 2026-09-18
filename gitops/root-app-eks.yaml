@@ -1,0 +1,19 @@
+# kubectl apply -n argocd -f gitops/root-app-eks.yaml   (EKS only, in addition to argocd/root-app.yaml)
+# EKS only: extra app-of-apps for AWS-specific resources (apply in addition to the root app).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudforge-root-eks
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/vinitpatil519/CloudForge.git
+    targetRevision: main
+    path: gitops/argocd-eks
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

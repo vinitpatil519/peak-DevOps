@@ -1,0 +1,9 @@
+---
+# Only the local toolchain (Docker, kubectl, kind, istioctl, argocd, helm).
+- name: Workstation toolchain
+  hosts: workstation
+  become: true
+  roles:
+    - docker
+    - kubectl
+    - helm

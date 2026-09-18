@@ -1,0 +1,53 @@
+# Cache-only Redis: data is disposable (API degrades gracefully), so no replication/AOF.
+# For production on AWS consider ElastiCache (Valkey/Redis OSS) with Multi-AZ.
+fullnameOverride: redis
+
+image:
+  repository: redis
+  tag: "8.2-alpine"
+  pullPolicy: IfNotPresent
+
+# Expected key: password
+auth:
+  existingSecret: redis-credentials
+  createSecret: false
+  password: ""
+externalSecret:
+  enabled: false
+  secretStoreRef: { kind: ClusterSecretStore, name: aws-secrets-manager }
+  remoteKey: cloudforge/dev/backend
+
+maxmemory: 200mb
+maxmemoryPolicy: allkeys-lru
+
+persistence:
+  enabled: false
+  size: 1Gi
+  storageClass: ""
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 320Mi }
+
+exporter:
+  enabled: true
+  image: oliver006/redis_exporter:v1.77.0
+
+pdb:
+  enabled: true
+  maxUnavailable: 1     # cache may be evicted during drains; API falls back to Postgres
+
+networkPolicy:
+  enabled: true
+  clientNamespaces: [backend]
+  monitoringNamespace: monitoring
+
+istio:
+  enabled: true
+  allowedPrincipals:
+    - cluster.local/ns/backend/sa/backend-api
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }
