@@ -1,34 +1,15 @@
 # CloudForge Platform
 
-CloudForge is a production-style DevOps/SRE portfolio project. The application is a small
-3-tier online store (React, Apache, FastAPI, PostgreSQL, Redis). The interesting part is
-everything around it: containers, Kubernetes, Helm, GitOps delivery, canary and blue/green
-releases, a zero-trust service mesh, observability, and infrastructure as code.
+Production-style DevOps/SRE portfolio project: a small 3-tier online store (React, Apache,
+FastAPI, PostgreSQL, Redis) delivered with Jenkins CI, Argo CD GitOps, Helm, Istio mTLS,
+canary and blue/green releases, Prometheus/Grafana/Loki observability, Terraform on AWS EKS and
+Ansible. The same Helm charts run **free on kind/minikube** and on **AWS EKS**; only the values files differ.
 
-The same Helm charts run **for free on a local kind/minikube cluster** and on **AWS EKS**.
-Only small per-environment values files differ.
-
-**Contents**
-
-1. [Architecture at a glance](#1-architecture-at-a-glance)
-2. [Technologies and what each one does](#2-technologies-and-what-each-one-does)
-3. [Runtime topology](#3-runtime-topology)
-4. [Application workflows](#4-application-workflows)
-5. [CI/CD workflow](#5-cicd-workflow)
-6. [GitOps workflow](#6-gitops-workflow)
-7. [Release strategies](#7-release-strategies)
-8. [Security model](#8-security-model)
-9. [Observability](#9-observability)
-10. [AWS infrastructure and provisioning](#10-aws-infrastructure-and-provisioning)
-11. [Quick start](#11-quick-start)
-12. [Documentation index](#12-documentation-index)
-13. [Repository layout](#13-repository-layout)
-14. [Versions](#14-versions)
-15. [What to look at first](#15-what-to-look-at-first)
+**Contents:** [Architecture](#1-architecture) · [Technologies](#2-technologies) · [Runtime](#3-runtime-topology) · [Request flows](#4-request-flows) · [CI/CD](#5-cicd) · [GitOps](#6-gitops) · [Releases](#7-release-strategies) · [Security](#8-security) · [Observability](#9-observability) · [AWS](#10-aws-and-provisioning) · [Quick start](#11-quick-start) · [Docs](#12-docs-and-layout)
 
 ---
 
-## 1. Architecture at a glance
+## 1. Architecture
 
 ```mermaid
 flowchart LR
@@ -60,175 +41,122 @@ flowchart LR
     REG -->|pull| Mesh
 ```
 
-In one sentence: **Jenkins builds and tests, Git records the decision, Argo CD deploys, Istio secures
-the traffic, Prometheus/Grafana/Loki show what is happening.**
-
-How the pieces fit:
-
-| Concern | Who owns it |
-|---|---|
-| Building, testing, scanning code and images | Jenkins (plus SonarQube, OWASP Dependency-Check, Trivy) |
-| Deciding what runs in the cluster | Git (`gitops/environments/<env>/*.yaml`) |
-| Making the cluster match Git | Argo CD |
-| Releasing safely (canary, blue/green) | Argo Rollouts with Istio and Prometheus |
-| Encrypting and authorising traffic | Istio, NetworkPolicy, Pod Security Standards |
-| Seeing and alerting | Prometheus, Grafana, Loki, Fluent Bit, Alertmanager |
-| Creating cloud infrastructure | Terraform (AWS), Ansible (workstations and CI host) |
+**Jenkins builds and tests, Git records the decision, Argo CD deploys, Istio secures traffic, Prometheus/Grafana/Loki show what is happening.**
 
 ---
 
-## 2. Technologies and what each one does
+## 2. Technologies
 
-Every technology in the repository, grouped by purpose, with its concrete role in this project.
+### Application
 
-### 2.1 Application code
-
-| Technology | What it does in CloudForge |
+| Technology | Role in CloudForge |
 |---|---|
-| **React 19** | The single-page storefront UI in `app-frontend/`: stat tiles, product table with a "Buy 1" button, add-product form, recent orders. |
-| **Vite 7** | Dev server and production bundler for the React app. Emits hashed asset files so they can be cached for a year. In dev it proxies `/api` to Apache or FastAPI. |
-| **Python 3.13** | Language of the backend. |
-| **FastAPI** | The REST API in `app-backend/`: products, orders, stats, info, health probes. Generates OpenAPI docs at `/api/docs`. |
-| **Pydantic v2 / pydantic-settings** | Validates request bodies (bad input returns HTTP 422) and loads all configuration from `CF_*` environment variables (12-factor). |
-| **SQLAlchemy 2 (async)** | ORM and connection pool for PostgreSQL. Order creation uses `SELECT ... FOR UPDATE` to prevent overselling. |
-| **asyncpg** | Async PostgreSQL driver used by SQLAlchemy. |
-| **redis-py (asyncio)** | Redis client. Implements a read-through cache with TTLs (60 s products, 15 s stats). Cache errors never fail a request. |
-| **Gunicorn + Uvicorn worker** | Production process manager and ASGI server. One worker per pod; horizontal scaling comes from the HPA. |
-| **prometheus-client** | Exposes `/metrics`: request count, latency histogram, in-flight gauge, cache events, orders created, revenue. |
-| **python-json-logger** | Structured JSON logs to stdout so Fluent Bit and Loki can parse fields without regex. |
-| **PostgreSQL 17** | System of record: `products` and `orders` tables, seeded from `db/init.sql`. |
-| **Redis 8** | Disposable cache in front of PostgreSQL (`allkeys-lru`, password protected, no persistence). |
-| **NGINX (unprivileged)** | Runs inside the frontend container. Serves the static React build, sets security headers, proxies `/api/` to Apache, writes JSON access logs. |
-| **Apache httpd 2.4** | Reverse-proxy tier between frontend and API. Allows only `/api/*`, creates/propagates `X-Request-ID`, cleans headers, applies timeouts and connection pooling. |
+| React 19, Vite 7 | Storefront SPA (catalogue, buy, add product, orders); Vite bundles it with hashed assets |
+| FastAPI, Pydantic, pydantic-settings | REST API, input validation (422), `CF_*` env-var config |
+| SQLAlchemy 2 (async), asyncpg | PostgreSQL access; `SELECT ... FOR UPDATE` prevents overselling |
+| redis-py | Read-through cache (60 s products, 15 s stats); cache failures never fail a request |
+| Gunicorn + Uvicorn | Production server, one worker per pod (scale with HPA) |
+| prometheus-client, python-json-logger | `/metrics` (RED + business counters) and JSON logs |
+| PostgreSQL 17 | Products and orders (seeded from `db/init.sql`) |
+| Redis 8 | Disposable cache (`allkeys-lru`, password, no persistence) |
+| NGINX (unprivileged) | Serves React build, security headers, proxies `/api/` to Apache |
+| Apache httpd 2.4 | Reverse proxy: `/api/*` allow-list, `X-Request-ID`, timeouts, pooling |
 
-### 2.2 Testing and code quality
+### Testing and quality
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **pytest, pytest-asyncio, pytest-cov** | Backend unit tests with coverage and JUnit output for Jenkins. |
-| **httpx** | Async test client that calls the FastAPI app directly. |
-| **aiosqlite** | Lets tests run against in-memory-style SQLite instead of a real PostgreSQL. |
-| **fakeredis** | In-process fake Redis for backend tests. |
-| **ruff** | Python linter and formatter, including bandit-style security rules (`S`). |
-| **vitest + Testing Library + jsdom** | Frontend unit tests with coverage. |
-| **ESLint** | Frontend linting (including React hooks rules). |
-| **SonarQube Community** | Static analysis and the quality gate that can fail the pipeline. |
-| **k6** | Load test (`scripts/load-test.js`) used to drive autoscaling and check SLO thresholds. |
-| **kubeconform** | Validates rendered Kubernetes manifests (and CRDs) against schemas in CI. |
-| **`scripts/smoke-test.sh`** | Eleven end-to-end checks through every tier. |
+| pytest, httpx, aiosqlite, fakeredis | Backend tests with SQLite and fake Redis, no services needed |
+| vitest, Testing Library, jsdom, ESLint | Frontend tests and lint |
+| ruff | Python lint/format including security rules |
+| SonarQube | Static analysis and pipeline quality gate |
+| k6 | Load test to drive autoscaling and check SLOs |
+| kubeconform, `smoke-test.sh` | Manifest validation; 11 end-to-end checks |
 
-### 2.3 Containers and local runtime
+### Containers and local runtime
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **Docker** | Builds the three images (`api`, `web`, `apache-proxy`) with multi-stage builds, non-root users, health checks and OCI labels. |
-| **Docker Compose** | Runs the full 3-tier app on one machine (`docker compose up`). Has three networks; the `data` network is `internal` so only the API can reach PostgreSQL and Redis. Optional `observability` profile adds Prometheus and Grafana. |
-| **kind** | Free local Kubernetes cluster (1 control plane + 2 workers) running inside Docker. |
-| **minikube (Calico)** | Alternative local cluster; Calico is used because it enforces NetworkPolicy. |
-| **Local registry (`registry:3`)** | `localhost:5001` image registry used by kind and Jenkins. |
+| Docker | Three multi-stage, non-root images (`api`, `web`, `apache-proxy`) |
+| Docker Compose | Local full stack; `data` network is internal; optional Prometheus/Grafana profile |
+| kind, minikube (Calico) | Free local Kubernetes clusters |
+| Local registry | `localhost:5001` image registry for kind and Jenkins |
 
-### 2.4 Kubernetes packaging and delivery
+### Kubernetes and delivery
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **Kubernetes 1.34** | Runs everything: Deployments, StatefulSets, Services, Ingress, HPA, PDB, NetworkPolicy, CronJob, ConfigMap, Secret, RBAC, ResourceQuota, LimitRange. |
-| **Helm 3** | Six charts under `helm-charts/charts/`: `frontend`, `backend`, `apache-proxy`, `postgres`, `redis`, `platform`. Values files per environment change only what differs. |
-| **Argo CD 3** | GitOps controller. Watches the repository and makes the cluster match it, with auto-prune and self-heal. |
-| **Argo CD ApplicationSet** | Generates one Argo CD Application per (cluster x chart) from a single template, with sync waves for ordering. |
-| **Argo CD AppProject** | Permission boundary: allowed repos, namespaces, cluster-scoped kinds, roles, weekend sync window for prod. |
-| **Argo Rollouts** | Replaces Deployments for backend (canary) and frontend (blue/green); runs metric analysis and automatic rollback. |
-| **`k8s-manifests/rendered/`** | Plain YAML rendered from the charts per environment, used for validation and review. |
-| **Kustomize** | `kustomization.yaml` in each rendered environment folder. |
-| **Renovate** | Bot that opens pull requests for dependency, image, chart and provider updates. |
+| Kubernetes 1.34 | Runtime: Deployments, StatefulSets, Services, Ingress, HPA, PDB, NetworkPolicy, CronJob, RBAC, quotas |
+| Helm 3 | Six charts: `frontend`, `backend`, `apache-proxy`, `postgres`, `redis`, `platform` |
+| Argo CD 3 (+ ApplicationSet, AppProject) | GitOps: cluster follows Git; one Application per cluster x chart; permission boundaries |
+| Argo Rollouts | Canary (backend) and blue/green (frontend) with metric analysis |
+| Kustomize | Wraps rendered manifests per environment |
+| Renovate | Opens PRs for dependency, image and chart updates |
 
-### 2.5 Traffic, mesh and edge
+### Traffic and edge
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **NGINX Ingress Controller** | Public entry point into the cluster: host routing, TLS termination, rate limiting (50 req/s), JSON access logs. Joined to the mesh for outbound mTLS only. |
-| **Istio 1.27** | Service mesh. Provides STRICT mTLS, retries, timeouts, outlier detection, connection limits and the weighted routing used by canary releases. |
-| **Istio CNI plugin** | Sets up traffic redirection at node level so application pods can stay unprivileged (needed for Pod Security `restricted`). |
-| **Istio VirtualService / DestinationRule** | Weighted routing between `stable` and `canary` subsets; retry and outlier policy. |
-| **Istio PeerAuthentication / AuthorizationPolicy / Sidecar** | Mesh-wide mTLS, deny-all plus identity-based allow rules, and scoped sidecar egress. |
-| **Istio Ingress Gateway** | Alternate mesh-native edge (behind an NLB on EKS); the migration path away from ingress-nginx. |
-| **cert-manager** | Issues and renews TLS certificates (Let's Encrypt; DNS-01 on EKS). |
-| **ExternalDNS (EKS)** | Creates Route 53 records automatically from Ingress and Service objects. |
-| **AWS Load Balancer Controller (EKS)** | Provisions NLBs for Services of type LoadBalancer. |
-| **Cloudflare (optional)** | Optional DNS/CDN in front of the edge, per the original blueprint. |
+| NGINX Ingress | Public entry: host routing, TLS, rate limit, JSON access logs |
+| Istio 1.27 (+ CNI) | STRICT mTLS, retries, outlier detection, weighted canary routing; CNI keeps pods unprivileged |
+| Istio Gateway | Alternate mesh-native edge, migration path from ingress-nginx |
+| cert-manager | Issues and renews TLS certs (Let's Encrypt) |
+| ExternalDNS, AWS LB Controller (EKS) | Route 53 records and NLBs from Kubernetes objects |
+| Cloudflare (optional) | DNS/CDN in front of the edge |
 
-### 2.6 Scaling and reliability
+### Scaling and reliability
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **metrics-server** | Supplies CPU/memory metrics that the HPA needs. |
-| **HPA** | Scales backend, Apache and frontend by CPU and memory. Scale-up fast, scale-down slow. |
-| **VPA (Fairwinds chart)** | Recommendation-only mode to suggest right-sized requests without fighting the HPA. |
-| **Cluster Autoscaler (EKS)** | Adds and removes worker nodes. |
-| **PodDisruptionBudget** | Keeps a minimum number of pods available during node drains and upgrades. |
-| **Probes** | Startup, liveness and readiness probes on every workload. Readiness checks the database, not the cache. |
-| **PostgreSQL backup CronJob** | Nightly `pg_dump` with 7-day retention. |
+| metrics-server, HPA | Scale backend, Apache, frontend on CPU/memory |
+| VPA | Recommendation-only sizing (does not fight HPA) |
+| Cluster Autoscaler (EKS) | Adds/removes nodes |
+| PodDisruptionBudget, probes | Availability during drains; startup/liveness/readiness checks |
+| Postgres backup CronJob | Nightly `pg_dump`, 7-day retention |
 
-### 2.7 CI/CD and security scanning
+### CI/CD and scanning
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **Jenkins LTS** | CI server running the declarative `Jenkinsfile`. Never deploys directly; its only write is a Git commit that bumps an image tag. |
-| **Jenkins Configuration as Code (JCasC)** | Defines users, credentials, SonarQube server and the seed job in `jenkins/casc/jenkins.yaml`. |
-| **Jenkins plugins** | Pipeline, Docker workflow, Git/GitHub, credentials binding, SonarQube, Dependency-Check publisher, JUnit, coverage, AWS credentials, matrix and role-strategy auth. |
-| **GitHub Actions** | Lightweight PR checks: lint, tests, `helm lint`, "rendered manifests up to date", `terraform fmt` and `validate`. |
-| **OWASP Dependency-Check** | Scans libraries for known CVEs; fails the build at CVSS 9 or above. |
-| **Trivy** | Three uses: filesystem scan (vulnerabilities and secrets), config scan (Terraform, Helm, Dockerfile, Kubernetes) and image scan. Also produces a CycloneDX SBOM per image. |
-| **CycloneDX SBOM** | Software bill of materials archived for each image build. |
-| **yq** | Edits `image.tag` and `image.repository` in the GitOps values files during promotion. |
-| **pre-commit + gitleaks** | Local hooks: secret scanning, private-key detection, ruff, terraform fmt/validate, YAML/JSON checks. |
+| Jenkins LTS + JCasC | CI pipeline; only writes a Git commit, never deploys directly |
+| GitHub Actions | Lightweight PR checks (lint, tests, helm lint, terraform validate) |
+| OWASP Dependency-Check | Vulnerable libraries; fails at CVSS 9+ |
+| Trivy | Filesystem, IaC and image scans; CycloneDX SBOM |
+| yq | Bumps image tags in GitOps values |
+| pre-commit, gitleaks | Local secret scanning and lint hooks |
 
-### 2.8 Security controls in the cluster
+### Cluster security
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **Pod Security Standards (`restricted`)** | Admission control on app namespaces: non-root, no privilege escalation, dropped capabilities, seccomp. |
-| **NetworkPolicy** | Default-deny per namespace with explicit allows (DNS, istiod, tier to tier, monitoring). |
-| **Kubernetes RBAC** | Viewer, developer (no Secrets access) and CI read-only roles. |
-| **ResourceQuota and LimitRange** | Stop any namespace from using the whole cluster and set default sizes. |
-| **External Secrets Operator (EKS)** | Copies passwords from AWS Secrets Manager into Kubernetes Secrets, refreshing hourly. |
-| **AWS Secrets Manager + KMS** | Stores generated credentials; KMS encrypts Kubernetes Secrets at rest. |
-| **EKS Pod Identity** | Gives each in-cluster controller its own least-privilege AWS role with no static keys. |
-| **EKS access entries** | Maps AWS principals to Kubernetes admin/developer access. |
+| Pod Security Standards (`restricted`) | Rejects root or privileged pods |
+| NetworkPolicy, Istio AuthorizationPolicy | Default-deny at network and identity level |
+| RBAC, ResourceQuota, LimitRange | Least-privilege roles, per-namespace caps |
+| External Secrets, Secrets Manager, KMS | Secrets synced from AWS, encrypted at rest |
+| EKS Pod Identity, access entries | Per-controller AWS roles without static keys; kubectl access mapping |
 
-### 2.9 Observability
+### Observability
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **Prometheus (kube-prometheus-stack)** | Scrapes and stores metrics; evaluates recording and alert rules. The stack also bundles the Prometheus Operator, node-exporter and kube-state-metrics. |
-| **Grafana** | Four dashboards as code: Cluster, Nodes, Application (RED), Business. Loki derived field links `request_id` to logs. |
-| **Loki** | Log storage (filesystem locally, S3 on EKS). |
-| **Fluent Bit** | DaemonSet that tails container logs, adds Kubernetes metadata and ships to Loki. |
-| **Alertmanager** | Routes alerts to chat and pager webhooks, groups them and inhibits noisy ones. |
-| **Exporters** | `postgres-exporter`, `redis_exporter` and `apache-exporter` sidecars expose dependency metrics. |
-| **PrometheusRule / ServiceMonitor / PodMonitor** | Declarative alert rules (19 alerts, SLO burn-rate) and scrape targets. |
-| **Argo Rollouts dashboard** | Read-only view of release progress. |
-| **`generate_dashboards.py`** | Python generator that writes the four dashboard JSON files. |
+| Prometheus (kube-prometheus-stack) | Metrics, recording and alert rules (19 alerts, SLO burn-rate) |
+| Grafana | Four dashboards as code (Cluster, Nodes, Application, Business) |
+| Loki + Fluent Bit | Log storage and shipping |
+| Alertmanager | Routes alerts to chat/pager |
+| postgres, redis, apache exporters | Dependency metrics via sidecars |
 
-### 2.10 Infrastructure as code and cloud
+### Infrastructure as code and cloud
 
-| Technology | What it does |
+| Technology | Role |
 |---|---|
-| **Terraform >= 1.10** | Builds AWS infrastructure from seven modules (`vpc`, `security-groups`, `iam`, `eks`, `ecr`, `s3`, `route53`). Remote state in S3 with native locking. Providers: `aws`, `random`, `http`. |
-| **Ansible** | Installs and configures tools: roles `docker`, `kubectl` (also kind, istioctl, argocd, rollouts plugin, k9s), `helm`, `monitoring`, `jenkins`. Playbooks: `workstation`, `jenkins`, `monitoring`, `site`. |
-| **AWS EKS** | Managed Kubernetes for the paid path (system node group on-demand, apps node group Spot). |
-| **AWS VPC** | Three-AZ network with public/private subnets, NAT, S3 endpoint and flow logs. |
-| **AWS ECR** | Private image registry with immutable tags and scan-on-push. |
-| **AWS S3** | Terraform state, Loki chunks and PostgreSQL backups (KMS encrypted, TLS-only). |
-| **AWS Route 53** | DNS zone plus CAA record. |
-| **AWS IAM** | Cluster/node roles, Pod Identity roles, CI push-to-ECR policy. |
-| **AWS CloudWatch** | EKS control-plane audit logs and VPC flow logs. |
-| **Makefile and shell scripts** | One-command workflows: bootstrap and teardown for kind and EKS, render manifests, smoke test, canary demo. |
+| Terraform >= 1.10 | Seven modules: `vpc`, `security-groups`, `iam`, `eks`, `ecr`, `s3`, `route53`; S3 remote state |
+| Ansible | Roles `docker`, `kubectl`, `helm`, `monitoring`, `jenkins` to set up workstations and CI |
+| AWS EKS, VPC, ECR, S3, Route 53, IAM, CloudWatch | Cluster, network, images, state/logs/backups, DNS, roles, audit logs |
+| Makefile, shell scripts | One-command bootstrap, teardown, render, smoke test, canary demo |
 
 ---
 
 ## 3. Runtime topology
-
-Namespaces, tiers and the mesh. Solid arrows are request traffic; dotted arrows are metrics, logs and certificates.
 
 ```mermaid
 flowchart TB
@@ -281,23 +209,13 @@ flowchart TB
     prom --> am
 ```
 
-Why each hop exists:
-
-| Hop | Responsibility |
-|---|---|
-| NGINX Ingress | Public entry, TLS termination, rate limiting, JSON access logs. |
-| Istio Ingress Gateway | Alternate mesh-native edge; the migration target away from ingress-nginx. |
-| Frontend NGINX | Serves the React build with security headers and proxies `/api/` so the browser uses a single origin (no CORS). |
-| Apache reverse proxy | Gateway tier: path allow-list, request-ID, header hygiene, timeouts, connection pooling. |
-| FastAPI | Business logic, RED and business metrics, JSON logs, readiness that checks PostgreSQL. |
-| Redis | Read-through cache; a soft dependency. |
-| PostgreSQL | System of record; row-level locking prevents overselling. |
+Apache is a gateway tier (path allow-list, request-ID, timeouts). Redis is a soft dependency: the API falls back to PostgreSQL.
 
 ---
 
-## 4. Application workflows
+## 4. Request flows
 
-### 4.1 Browsing the catalogue (cache miss, then hit)
+**Browse (cache miss then hit)**
 
 ```mermaid
 sequenceDiagram
@@ -327,7 +245,7 @@ sequenceDiagram
     API-->>U: 200 JSON with no database query
 ```
 
-### 4.2 Checkout (concurrency-safe order creation)
+**Checkout (concurrency-safe)**
 
 ```mermaid
 sequenceDiagram
@@ -351,22 +269,7 @@ sequenceDiagram
     end
 ```
 
-### 4.3 API surface
-
-| Method and path | Purpose | Cache |
-|---|---|---|
-| `GET /api/v1/products` | List products | `products:all`, 60 s |
-| `GET /api/v1/products/{id}` | One product | `product:{id}`, 60 s |
-| `POST /api/v1/products` | Create product (409 on duplicate SKU) | invalidates list and stats |
-| `POST /api/v1/orders` | Create order (409 on insufficient stock) | invalidates list, stats, product |
-| `GET /api/v1/orders?limit=` | Recent orders (max 200) | none |
-| `GET /api/v1/stats` | Product/order counts and revenue | `stats:summary`, 15 s |
-| `GET /api/v1/info` | Service, version, environment | none |
-| `GET /healthz` | Liveness: process is alive | none |
-| `GET /readyz` | Readiness: database reachable (Redis only reported as degraded) | none |
-| `GET /metrics` | Prometheus metrics | none |
-
-### 4.4 Local Docker Compose topology
+**Local Docker Compose network layout**
 
 ```mermaid
 flowchart LR
@@ -383,16 +286,13 @@ flowchart LR
     graf["grafana<br/>profile: observability"] --> prom
 ```
 
+Endpoints: `GET /api/v1/products`, `/products/{id}`, `/stats`, `/info`, `/orders`; `POST /api/v1/products`, `/orders`; probes `/healthz` (liveness) and `/readyz` (database reachable); `/metrics`.
+
 ---
 
-## 5. CI/CD workflow
+## 5. CI/CD
 
-Principles:
-
-1. **CI builds, Git decides, Argo CD deploys.** Jenkins never runs `kubectl apply` or `helm upgrade`.
-2. **Immutable artifacts.** Image tag is `<git sha>-<build number>`; ECR tags are immutable.
-3. **Shift-left security.** Every scan runs before an image is pushed.
-4. **One chart, many environments.** Only `gitops/environments/<env>/<chart>.yaml` differs.
+Principles: **CI builds, Git decides, Argo CD deploys** (Jenkins never runs `kubectl`/`helm`); image tag is `<git sha>-<build number>`; scans run before push; one chart, values per environment.
 
 ```mermaid
 flowchart LR
@@ -414,26 +314,11 @@ flowchart LR
     N -->|frontend| P["Blue/green<br/>preview, smoke Job,<br/>manual promote"]
 ```
 
-| Stage | Tooling | Fails the build when |
-|---|---|---|
-| Checkout | git | The commit message has `[skip ci]` (the bot's own promotion commit) |
-| Unit tests | ruff, pytest, eslint, vitest, vite build | Any lint or test fails |
-| SonarQube and quality gate | `sonar-scanner-cli` container, `waitForQualityGate` | Gate is red |
-| OWASP Dependency-Check | `owasp/dependency-check` | A dependency has CVSS >= 9 |
-| Trivy filesystem and IaC | `trivy fs`, `trivy config` | HIGH or CRITICAL finding |
-| Build images | `docker build` x3 in parallel | Build error |
-| Image scan and SBOM | `trivy image`, CycloneDX | Fixable HIGH or CRITICAL CVE |
-| Push images | `docker push` (main only; ECR login for `eks`) | Push error |
-| Helm lint and render | `helm lint`, `scripts/render-manifests.sh`, kubeconform | Invalid chart or manifest |
-| Promote via GitOps | `yq`, `git push` | Push error |
-
-Build parameters: `TARGET_ENV` (`local` or `eks`), `SKIP_OWASP`, `PROMOTE`.
+Stages fail on: lint/test failure, red SonarQube gate, dependency CVSS >= 9, HIGH/CRITICAL Trivy findings, invalid Helm/manifests. The promotion commit carries `[skip ci]` to avoid a build loop.
 
 ---
 
-## 6. GitOps workflow
-
-### 6.1 How Argo CD is structured
+## 6. GitOps
 
 ```mermaid
 flowchart TB
@@ -452,11 +337,9 @@ flowchart TB
     values[("gitops/environments/env/chart.yaml")] --> appset
 ```
 
-A cluster opts in by carrying the label `cloudforge.dev/env=local` or `eks` on its Argo CD cluster
-Secret. Adding a new environment means adding a values folder and labelling a cluster; no new
-Application YAML is required.
+A cluster opts in with the label `cloudforge.dev/env=local|eks`. A new environment is just a values folder plus a labelled cluster.
 
-### 6.2 Sync order (waves)
+**Sync order**
 
 ```mermaid
 flowchart LR
@@ -470,39 +353,22 @@ flowchart LR
     p3 --> p4["4<br/>frontend"]
 ```
 
-Add-ons that supply CRDs come first, then the platform layer, then data, API, proxy and web.
+`ignoreDifferences` lets HPA own replicas and Argo Rollouts own VirtualService weights and blue/green selectors.
 
-### 6.3 Who owns which field
-
-`ignoreDifferences` stops Argo CD from fighting other controllers:
-
-- `spec.replicas` on Deployments and Rollouts belongs to the HPA.
-- VirtualService route weights and DestinationRule subset labels belong to Argo Rollouts during a canary.
-- The `rollouts-pod-template-hash` Service selector belongs to Argo Rollouts during blue/green.
-
-### 6.4 Rollback
-
-| Situation | Action |
-|---|---|
-| Canary fails analysis | Automatic: weights return to stable, rollout is marked Degraded, alert fires |
-| Bad version fully rolled out | `git revert <promotion commit>`; Argo CD syncs the previous tag |
-| Frontend just promoted | `kubectl argo rollouts undo frontend -n frontend` within 60 s, then revert in Git |
-| Emergency, Git unavailable | Disable auto-sync, then `argocd app rollback <app> <id>` |
+**Rollback:** canary failure is automatic; otherwise `git revert` the promotion commit; frontend can also `kubectl argo rollouts undo` within 60 s.
 
 ---
 
 ## 7. Release strategies
 
-| Workload | Strategy | Traffic control | Gate |
-|---|---|---|---|
-| backend-api | Canary (Argo Rollouts) | Istio VirtualService weights across `stable` and `canary` subsets | Prometheus analysis: success rate >= 99 %, p95 <= 500 ms |
-| frontend | Blue/green (Argo Rollouts) | Service selector swap `frontend` (active) and `frontend-preview` | Smoke-test Job plus manual promotion |
-| apache-proxy | Rolling update, `maxUnavailable: 0` | Kubernetes Service | Readiness probe |
-| postgres, redis | StatefulSet rolling update | none | Readiness probe and PDB |
+| Workload | Strategy | Gate |
+|---|---|---|
+| backend-api | Canary 10, 25, 50, 100 % via Istio weights | Prometheus: success >= 99 %, p95 <= 500 ms |
+| frontend | Blue/green (Service selector swap) | Smoke-test Job, then manual promote |
+| apache-proxy | Rolling update, `maxUnavailable: 0` | Readiness probe |
+| postgres, redis | StatefulSet rolling update | Readiness probe, PDB |
 
-### 7.1 Backend canary
-
-Steps: 10 % -> pause 2 min -> analysis -> 25 % -> pause 2 min -> 50 % -> pause 5 min -> 100 %.
+**Backend canary**
 
 ```mermaid
 sequenceDiagram
@@ -528,12 +394,7 @@ sequenceDiagram
     end
 ```
 
-Apache always calls a single hostname. Istio splits traffic by pod label
-(`rollouts-pod-template-hash`), so no client change is needed and retries and outlier detection
-still apply. The analysis selects canary pods by name so the old version cannot cause a healthy
-canary to fail. "No traffic yet" counts as a pass so idle environments do not abort.
-
-### 7.2 Frontend blue/green
+**Frontend blue/green**
 
 ```mermaid
 sequenceDiagram
@@ -554,17 +415,11 @@ sequenceDiagram
     RO->>RO: keep blue 60 s for fast rollback, then scale down
 ```
 
-### 7.3 Why canary for the API and blue/green for the frontend
-
-- API requests are independent, so exposing a small percentage of them gives a meaningful error
-  and latency signal with a small blast radius.
-- A browser loads `index.html` plus hashed assets. Mixing versions mid-session could serve an
-  `index.html` whose assets exist only on the other version. Blue/green keeps each user on one
-  consistent version and switches atomically.
+**Why the difference:** API requests are independent, so a small traffic share gives a valid signal. A browser loads `index.html` plus hashed assets, and mixing versions could break the page, so the frontend switches atomically.
 
 ---
 
-## 8. Security model
+## 8. Security
 
 ```mermaid
 flowchart LR
@@ -596,18 +451,9 @@ flowchart LR
     L1 --> L2 --> L3 --> L4
 ```
 
-Traffic that is allowed (everything else is denied twice, by NetworkPolicy and by AuthorizationPolicy):
+Everything not explicitly allowed is denied twice (NetworkPolicy and AuthorizationPolicy). Containers run non-root with read-only filesystem, dropped capabilities and seccomp. Allowed-traffic matrix: [docs/security.md](docs/security.md).
 
-| From | To | Port | Identity check |
-|---|---|---|---|
-| ingress-nginx, istio-ingressgateway | frontend | 8080 | Their service accounts |
-| frontend | apache-proxy | 8080 | `ns/frontend/sa/frontend`, path `/api/*` |
-| apache-proxy | backend-api | 8000 | `ns/backend/sa/apache-proxy`, GET/POST `/api/*` |
-| backend-api | postgres, redis | 5432, 6379 | `ns/backend/sa/backend-api` |
-| postgres-backup Job | postgres | 5432 | `ns/database/sa/postgres-backup` |
-| monitoring | sidecar metrics, exporters | 15020, 9117, 9121, 9187 | Port-level exception for metrics only |
-
-### Secret delivery on EKS
+**Secrets on EKS**
 
 ```mermaid
 sequenceDiagram
@@ -627,8 +473,7 @@ sequenceDiagram
     POD->>K: read via envFrom (KMS encrypted at rest)
 ```
 
-Locally, random credentials are generated at bootstrap directly into Kubernetes Secrets and never
-written to Git. Full details are in [docs/security.md](docs/security.md).
+Locally, random credentials are generated at bootstrap and never written to Git.
 
 ---
 
@@ -656,17 +501,7 @@ flowchart LR
     graf --> dash["Dashboards: Cluster, Nodes,<br/>Application, Business"]
 ```
 
-- **Correlation:** every request carries `X-Request-ID`. NGINX forwards it, Apache creates it when
-  missing, FastAPI logs it, and Grafana links `request_id` to Loki log lines.
-- **Application metrics:** `http_requests_total`, `http_request_duration_seconds`,
-  `http_requests_in_flight`, `cloudforge_cache_events_total`, `cloudforge_orders_created_total`,
-  `cloudforge_order_revenue_cents_total`.
-- **SLO:** 99.5 % of API requests succeed over 30 days and p95 latency stays below 500 ms.
-- **Burn-rate alerts:** fast burn 14.4x over 5 min and 1 h pages someone; slow burn 6x over 1 h and
-  6 h opens a ticket. Nineteen alerts in total, each linked to a runbook in
-  [docs/runbooks.md](docs/runbooks.md).
-
-### Alert path
+`X-Request-ID` is created by Apache if missing and logged by every tier, so Grafana links a request to its Loki logs. SLO: 99.5 % of requests succeed and p95 < 500 ms. Burn-rate alerts: 14.4x over 5 m and 1 h pages; 6x over 1 h and 6 h opens a ticket. Each alert has a runbook in [docs/runbooks.md](docs/runbooks.md).
 
 ```mermaid
 sequenceDiagram
@@ -688,7 +523,7 @@ sequenceDiagram
 
 ---
 
-## 10. AWS infrastructure and provisioning
+## 10. AWS and provisioning
 
 ```mermaid
 flowchart TB
@@ -723,23 +558,7 @@ flowchart TB
     cp --- kms
 ```
 
-### Terraform modules
-
-`infra-terraform/modules`: `vpc`, `security-groups`, `iam`, `eks`, `ecr`, `s3`, `route53`. They are
-composed in `environments/dev`. The one-time `bootstrap/` folder creates the S3 state bucket
-(versioned, KMS encrypted, TLS-only).
-
-### Ansible roles
-
-| Role | Purpose |
-|---|---|
-| `docker` | Install Docker Engine (detects Docker Desktop and skips) |
-| `kubectl` | kubectl, kind, istioctl, argocd CLI, Argo Rollouts plugin, k9s |
-| `helm` | Helm |
-| `monitoring` | Install kube-prometheus-stack, Loki, Fluent Bit into the current cluster |
-| `jenkins` | Start the Jenkins + SonarQube Compose stack and wait until healthy |
-
-### How the paths connect
+Terraform builds this from the seven modules; Ansible installs tools and Jenkins. `make eks-down` removes load balancers and volumes before `terraform destroy`; EKS costs roughly $8-12/day.
 
 ```mermaid
 flowchart LR
@@ -762,140 +581,43 @@ flowchart LR
 # A. Just the app (Docker only)
 cp .env.example .env && docker compose up --build -d            # http://localhost:3000
 
-# B. Full platform on kind (free): Istio, ingress, rollouts, monitoring, logging
+# B. Full platform on kind (free)
 make kind-up                                                     # ~10 min first time
 echo "127.0.0.1 cloudforge.local preview.cloudforge.local" | sudo tee -a /etc/hosts
-make smoke && open http://cloudforge.local
-make canary                                                      # watch a canary + blue/green
+make smoke && make canary                                        # e2e test, then canary + blue/green demo
 
-# C. kind with Argo CD in control (needs the repo pushed to GitHub)
+# C. kind with Argo CD in control (repo must be on GitHub)
 make kind-gitops
 
-# D. AWS EKS (paid - see docs/setup-eks.md)
+# D. AWS EKS (paid, see docs/setup-eks.md)
 make tf-bootstrap tf-plan tf-apply eks-up
 make eks-down                                                    # always tear down after a demo
 ```
 
-On Windows, run the bash commands inside WSL2. See [docs/setup-local.md](docs/setup-local.md).
-
-Useful targets (`make help` lists all):
-
-| Target | What it does |
-|---|---|
-| `make test` | Backend and frontend lint plus tests |
-| `make up` / `make down` | Start or stop the Docker Compose stack |
-| `make up-obs` | Compose stack plus Prometheus and Grafana |
-| `make kind-up` / `make kind-gitops` / `make kind-down` | Create or delete the local platform |
-| `make smoke` | End-to-end smoke test |
-| `make canary` | Trigger a canary and blue/green release |
-| `make render` | Render Helm charts to `k8s-manifests/rendered/` |
-| `make lint-charts ENV=local` | `helm lint` every chart |
-| `make dashboards` | Regenerate Grafana dashboard JSON |
-| `make scan` | Trivy filesystem and IaC scan |
-| `make tf-plan` / `make tf-apply` | Terraform plan and apply (costs money) |
-| `make eks-up` / `make eks-down` | Bootstrap or tear down EKS safely |
+On Windows run the bash commands in WSL2. `make help` lists every target.
 
 ---
 
-## 12. Documentation index
+## 12. Docs and layout
 
-| Doc | Contents |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | System, runtime topology, security layers, AWS and pipeline diagrams |
-| [docs/sequence-diagrams.md](docs/sequence-diagrams.md) | Request, checkout, CI to GitOps, canary, blue/green, secrets, alerting flows |
-| [docs/setup-local.md](docs/setup-local.md) | Windows (WSL2) and Linux, Compose, kind, minikube, GitOps and Jenkins |
-| [docs/setup-eks.md](docs/setup-eks.md) | Terraform, EKS bootstrap, teardown, cost notes |
-| [docs/cicd-and-gitops.md](docs/cicd-and-gitops.md) | Jenkins stages and gates, Argo CD structure, promotion, rollback |
-| [docs/deployment-strategies.md](docs/deployment-strategies.md) | Canary (Istio and analysis) and blue/green design |
-| [docs/observability.md](docs/observability.md) | Metrics, logs, dashboards, SLOs, queries |
-| [docs/security.md](docs/security.md) | Controls per layer, allowed traffic matrix, trade-offs |
-| [docs/runbooks.md](docs/runbooks.md) | One runbook per alert |
-
----
-
-## 13. Repository layout
+Docs: [architecture](docs/architecture.md) · [sequence diagrams](docs/sequence-diagrams.md) · [local setup](docs/setup-local.md) · [EKS setup](docs/setup-eks.md) · [CI/CD and GitOps](docs/cicd-and-gitops.md) · [deployment strategies](docs/deployment-strategies.md) · [observability](docs/observability.md) · [security](docs/security.md) · [runbooks](docs/runbooks.md)
 
 ```
 cloudforge/
-├── app-backend/                 FastAPI service (async SQLAlchemy, Redis cache, Prometheus metrics, JSON logs, tests)
-├── app-frontend/                React 19 + Vite SPA, unprivileged NGINX runtime, vitest
-├── apache-proxy/                Apache httpd reverse-proxy tier (request-id, path allow-list, JSON logs)
-├── db/init.sql                  Schema and seed data (Compose)
-├── docker-compose.yml           Local 3-tier stack (+ observability profile)
-├── Jenkinsfile                  CI: tests, Sonar, OWASP DC, Trivy, build, scan/SBOM, push, GitOps bump
-├── jenkins/                     Jenkins LTS image, plugins, JCasC, SonarQube Compose stack
-├── helm-charts/charts/
-│   ├── frontend/                Deployment or Rollout (blue/green), Services, Ingress, HPA, PDB, NetworkPolicy, AuthZ
-│   ├── backend/                 Deployment or Rollout (canary), AnalysisTemplate, VirtualService, DestinationRule,
-│   │                            ConfigMap, Secret/ExternalSecret, HPA, VPA, PDB, NetworkPolicy, ServiceMonitor
-│   ├── apache-proxy/            Deployment + exporter, HPA, PDB, NetworkPolicy, AuthZ, ServiceMonitor
-│   ├── postgres/                StatefulSet + exporter, backup CronJob, PDB, NetworkPolicy, AuthZ
-│   ├── redis/                   StatefulSet + exporter, PDB, NetworkPolicy, AuthZ
-│   └── platform/                Namespaces (PSS), quotas, default-deny, Istio mTLS/Gateway/VS/DR/Sidecar,
-│                                RBAC, ClusterIssuers, PrometheusRules, PodMonitor, Grafana dashboards
-├── k8s-manifests/               Rendered plain YAML per env, IstioOperator, gp3 StorageClass, bootstrap
-├── gitops/                      Argo CD root apps, AppProjects, ApplicationSets, add-on and env values
-├── monitoring/                  kube-prometheus-stack, Loki, Fluent Bit, Argo Rollouts values; dashboards as code
-├── infra-terraform/             Bootstrap state bucket; modules vpc, security-groups, iam, eks, ecr, s3, route53; env dev
-├── infra-ansible/               Roles docker, kubectl, helm, monitoring, jenkins; playbooks; inventories
-├── scripts/                     Bootstrap/teardown (kind, EKS), render, smoke test, k6 load test, canary demo
-├── security/                    Trivy config/ignore, Dependency-Check suppressions
-├── docs/                        Architecture, sequences, setup, CI/CD, strategies, observability, security, runbooks
-├── Makefile · renovate.json · .pre-commit-config.yaml · .github/workflows/ci.yml
+├── app-backend/  app-frontend/  apache-proxy/   application tiers + Dockerfiles + tests
+├── db/init.sql · docker-compose.yml             local stack and schema
+├── Jenkinsfile · jenkins/                       CI pipeline, Jenkins/SonarQube stack (JCasC)
+├── helm-charts/charts/                          frontend, backend, apache-proxy, postgres, redis, platform
+├── gitops/                                      Argo CD roots, projects, ApplicationSets, add-on and env values
+├── k8s-manifests/                               rendered YAML, Istio operator config, bootstrap
+├── monitoring/                                  Prometheus stack, Loki, Fluent Bit, dashboards-as-code
+├── infra-terraform/  infra-ansible/             AWS infrastructure, tool provisioning
+├── scripts/ · security/ · docs/                 bootstrap, smoke/load tests, scan config, documentation
+└── Makefile · renovate.json · .pre-commit-config.yaml · .github/workflows/ci.yml
 ```
 
-The original blueprint lists eight repositories. This monorepo keeps each as a top-level folder
-so the whole platform is reviewable in one place:
+**Versions** (pinned per tool, bumped by Renovate): Python 3.13, FastAPI 0.118, Node 24, React 19, PostgreSQL 17, Redis 8.2, Kubernetes 1.34, Istio 1.27, Argo CD 3.1, Argo Rollouts 1.8, Terraform >= 1.10, AWS provider ~> 6.14.
 
-| Blueprint repository | Folder |
-|---|---|
-| app-frontend | `app-frontend/` |
-| app-backend | `app-backend/` (plus `apache-proxy/`) |
-| helm-charts | `helm-charts/charts/{frontend,backend,apache-proxy,postgres,redis,platform}` |
-| k8s-manifests | `k8s-manifests/` |
-| gitops | `gitops/` |
-| monitoring | `monitoring/` |
-| infra-terraform | `infra-terraform/` |
-| infra-ansible | `infra-ansible/` |
+**Start reading here:** `helm-charts/charts/backend/templates/{rollout,istio,analysistemplate}.yaml` (canary), `helm-charts/charts/platform/templates/` (zero-trust baseline), `Jenkinsfile`, `gitops/argocd/applicationsets/cloudforge-apps.yaml`, `infra-terraform/modules/eks`.
 
----
-
-## 14. Versions
-
-Pinned in one place per tool and bumped through Renovate pull requests:
-
-| Component | Version | Where pinned |
-|---|---|---|
-| Python / FastAPI / SQLAlchemy | 3.13 / 0.118 / 2.0 | `app-backend/requirements.txt`, Dockerfile |
-| Node / React / Vite | 24 LTS / 19 / 7 | `app-frontend/package.json`, Dockerfile |
-| PostgreSQL / Redis / Apache httpd / NGINX | 17 / 8.2 / 2.4 / 1.29 | charts, Dockerfiles |
-| Kubernetes (EKS) | 1.34 | `infra-terraform/environments/dev` |
-| Istio | 1.27 | `scripts/lib.sh`, Ansible vars |
-| Argo CD / Argo Rollouts | 3.1 / 1.8 (chart 2.40) | `scripts/lib.sh`, `gitops/argocd/addons` |
-| kube-prometheus-stack / Loki / Fluent Bit | 77.x / 6.x / 0.53 | `gitops/argocd/addons`, `scripts/lib.sh` |
-| Terraform / AWS provider | >= 1.10 / ~> 6.14 | `infra-terraform` |
-
-Before a real deployment, run Renovate (or `helm search repo`, `terraform init -upgrade`) to pick
-up releases newer than these pins.
-
----
-
-## 15. What to look at first
-
-1. `helm-charts/charts/backend/templates/{rollout,istio,analysistemplate}.yaml` - canary via Istio subsets and Prometheus analysis.
-2. `helm-charts/charts/platform/templates/` - zero-trust baseline (PSS, default-deny, mTLS, AuthZ, RBAC).
-3. `Jenkinsfile` - security gates and GitOps promotion.
-4. `gitops/argocd/applicationsets/cloudforge-apps.yaml` - cluster x chart matrix with sync waves and drift rules.
-5. `infra-terraform/modules/eks` and `iam` - Pod Identity, access entries, NetworkPolicy-enforcing VPC CNI.
-
-### Known trade-offs
-
-- **ingress-nginx** reached end of community maintenance in March 2026. It stays because the
-  blueprint requires NGINX Ingress; the Istio Gateway is already wired as the migration target.
-- **Docker socket in Jenkins** (local lab only) is root-equivalent on the host. Use Kubernetes
-  agents or rootless BuildKit for shared CI.
-- **In-cluster PostgreSQL and Redis** are single-replica for cost. Production on AWS should use
-  RDS/Aurora Multi-AZ and ElastiCache, or an operator such as CloudNativePG.
-- **EKS public endpoint** is enabled but CIDR-restricted; disable it when a VPN or bastion is available.
-- **EKS values** contain placeholders (account ID, domain, hosted zone ID) that must be replaced
-  with Terraform outputs before a real deployment.
+**Known trade-offs:** ingress-nginx is past community end-of-maintenance (kept per blueprint; Istio Gateway is the migration target). Jenkins mounts the Docker socket (local lab only). PostgreSQL and Redis are single-replica in-cluster (use RDS/ElastiCache in production). EKS values hold placeholders (account ID, domain, zone ID) to replace with Terraform outputs.
