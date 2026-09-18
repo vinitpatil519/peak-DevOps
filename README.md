@@ -1,4 +1,4 @@
-# CloudForge Platform
+# Peak DevOps
 
 Production-style DevOps/SRE project: a 3-tier online store (React, Apache, FastAPI, PostgreSQL, Redis) with Jenkins CI, Argo CD GitOps, Helm, Istio mTLS, canary/blue-green releases, Prometheus/Grafana/Loki, Terraform on AWS EKS and Ansible. The same Helm charts run **free on kind/minikube** or on **AWS EKS**; only values files differ.
 
