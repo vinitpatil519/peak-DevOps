@@ -1,4 +1,4 @@
-# CloudForge Platform
+# Peak DevOps
 
 Production-style DevOps/SRE portfolio project: a small 3-tier online store (React, Apache,
 FastAPI, PostgreSQL, Redis) delivered with Jenkins CI, Argo CD GitOps, Helm, Istio mTLS,
